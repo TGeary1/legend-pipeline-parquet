@@ -1,0 +1,26 @@
+# Python environment
+venv/
+__pycache__/
+*.pyc
+
+# Data — never commit large binary datasets or generated tiers
+data/daq/*
+data/raw/*
+data/dsp/*
+data/hit/*
+!data/daq/.gitkeep
+!data/raw/.gitkeep
+!data/dsp/.gitkeep
+!data/hit/.gitkeep
+
+# Parsl run logs
+runinfo/
+
+# Test artifacts
+.pytest_cache/
+*.png
+
+# Editor/OS cruft
+.vscode/
+.DS_Store
+EOF

@@ -1,0 +1,9 @@
+# config/spe_calibration.yaml
+DataR_CH1@DT5730_1463_run_260520_1340_liquid_1:
+  gain: 43076.6
+  gain_err: 133.3
+  pedestal: 883.1
+  pedestal_err: 364.9
+  r_squared: 0.999981
+  n_peaks_used: 4
+  method: "self-calibration from low-charge population, charge_total field"
