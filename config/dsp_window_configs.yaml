@@ -1,0 +1,14 @@
+# config/dsp_window_configs.yaml
+5000:
+  baseline_end: 450
+  prompt_end: 650
+  prompt_width: 200
+  total_end: 4500
+  notes: "liquid argon, validated against run 260520_1340_liquid_1"
+
+3000:
+  baseline_end: 480
+  prompt_end: 680
+  prompt_width: 200
+  total_end: 3000
+  notes: "solid argon, run 1450pm — decay not fully settled by end of record; total_end uses full record as a stopgap, see PIPELINE_OVERVIEW.md caveat"

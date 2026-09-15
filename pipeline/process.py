@@ -4,12 +4,13 @@ import re
 import lgdo
 import numpy as np
 import pyarrow as pa
+import yaml
+from pipeline.dsp_config import build_dsp_config
 from pipeline.calibration import get_run_key
 from lh5.io import store as lh5store
 from pathlib import Path
 from daq2lh5 import build_raw
 from dspeed import build_dsp
-from .daq_config import COMPASS_CONFIG
 
 
 log = logging.getLogger(__name__)
@@ -40,14 +41,16 @@ def convert_to_raw(daq_path, base_dir, overwrite=False):
     return Path(result)
 
 
-def convert_to_dsp(raw_path, dsp_dir, dsp_config, overwrite=False):
+def convert_to_dsp(raw_path, dsp_dir, window_config="config/dsp_window_configs.yaml", overwrite=False):
     import pyarrow.parquet as pq
-    import pyarrow as pa
+    import pyarrow.compute as pc
     import lgdo
     from dspeed import build_dsp
 
     raw_path = Path(raw_path)
     dsp_path = Path(dsp_dir) / raw_path.name
+
+    Path(dsp_dir).mkdir(parents=True, exist_ok=True)
 
     if dsp_path.exists() and not overwrite:
         log.info(f"dsp SKIP (already exists): {dsp_path.name}")
@@ -56,15 +59,28 @@ def convert_to_dsp(raw_path, dsp_dir, dsp_config, overwrite=False):
     try:
         full_table = pq.read_table(str(raw_path))
 
-        # Provenance columns aren't physics data — dspeed doesn't need them,
-        # and lgdo.Array can't represent string columns like "medium" anyway.
+        # Determine wf_len directly from the data, not from filenames or the
+        # (known-unreliable) CompassHeader — the source of truth is the
+        # actual waveform array length.
+        wf_values = pc.struct_field(full_table.column("waveform"), "values")
+        wf_len = len(wf_values.to_numpy(zero_copy_only=False)[0])
+
+        with open(window_config) as f:
+            configs = yaml.safe_load(f)
+        if wf_len not in configs:
+            log.error(f"No dsp window config for wf_len={wf_len} in {window_config} — "
+                       f"add an entry before processing this run. File: {raw_path.name}")
+            return None
+        cfg = configs[wf_len]
+        log.info(f"Using dsp windows for wf_len={wf_len}: {cfg.get('notes', '')}")
+
         provenance_cols = ["run", "cycle_id", "rownumber", "medium"]
         physics_cols = [c for c in full_table.column_names if c not in provenance_cols]
 
         t_in = lgdo.Table(full_table.select(physics_cols))
+        dsp_config = build_dsp_config(cfg["baseline_end"], cfg["prompt_end"], cfg["total_end"])
         result = build_dsp(t_in, dsp_config=dsp_config)
 
-        # Reattach provenance — row order is preserved by build_dsp
         out_arrow = (result if result is not None else t_in).view_as("arrow")
         for col in provenance_cols:
             out_arrow = out_arrow.append_column(col, full_table.column(col))
@@ -90,7 +106,7 @@ def process_file(daq_path, base_dir, dsp_config="config/compass-dsp-config.json"
     if raw_path is None:
         return None
 
-    dsp_path = convert_to_dsp(raw_path, base_dir / "dsp", dsp_config, overwrite=overwrite)
+    dsp_path = convert_to_dsp(raw_path, base_dir / "dsp", overwrite=overwrite)
     if dsp_path is None:
         return None
 
@@ -103,7 +119,7 @@ def process_file(daq_path, base_dir, dsp_config="config/compass-dsp-config.json"
 
 def select_channel_files(daq_files, wanted_channels):
     """Filter a list of DAQ file paths, keeping only the given CoMPASS channel numbers."""
-    pattern = re.compile(r"CH(\d+)@")
+    pattern = re.compile(r"CH(\d+)@.*?(?:_(\d+))?\.BIN$", re.IGNORECASE)
     selected = []
     for f in daq_files:
         m = pattern.search(Path(f).name)
@@ -115,12 +131,15 @@ def select_channel_files(daq_files, wanted_channels):
             selected.append(f)
     return selected
 
-import yaml
+def sequence_key(path):
+    """Sort key so the unnumbered file sorts before _1, _2, _3, etc."""
+    m = re.search(r"_(\d+)\.BIN$", Path(path).name, re.IGNORECASE)
+    return int(m.group(1)) if m else 0
+
+
 from pipeline.calibration import get_run_key
 
-# pipeline/process.py (add this)
-
-def compute_psd_params(dsp_path, hit_dir, calibration_config="config/spe_calibration.yaml", overwrite=False):
+def compute_psd_params(dsp_path, hit_dir, calibration_config="config/spe_calibration.yaml", window_config="config/dsp_window_configs.yaml", overwrite=False):
     """Compute charge_prompt, charge_total, psd_param (and n_pe, if calibrated)
     from a dsp-tier Parquet file's wf_charge_window column."""
     import pyarrow.parquet as pq
@@ -129,6 +148,8 @@ def compute_psd_params(dsp_path, hit_dir, calibration_config="config/spe_calibra
 
     dsp_path = Path(dsp_path)
     hit_path = Path(hit_dir) / dsp_path.name
+
+    Path(hit_dir).mkdir(parents=True, exist_ok=True)
 
     if hit_path.exists() and not overwrite:
         log.info(f"hit SKIP (already exists): {hit_path.name}")
@@ -140,6 +161,27 @@ def compute_psd_params(dsp_path, hit_dir, calibration_config="config/spe_calibra
         wcw_col = pc.struct_field(t.column("wf_charge_window"), "values")
         wcw = np.stack(wcw_col.to_numpy(zero_copy_only=False))
         bl_sig = t.column("bl_sig").to_numpy()
+
+        # Determine prompt_width the same way convert_to_dsp determined its
+        # windows: keyed by the actual charge-window length, not assumed.
+        wf_charge_len = wcw.shape[1]
+        with open(window_config) as f:
+            configs = yaml.safe_load(f)
+        # Match by (total_end - baseline_end) == wf_charge_len, since that's
+        # the quantity actually recoverable from this file alone.
+        matching = [c for c in configs.values() if c["total_end"] - c["baseline_end"] == wf_charge_len]
+        if not matching:
+            log.error(f"No window config matches wf_charge_window length {wf_charge_len} for {dsp_path.name}")
+            return None
+        prompt_width = matching[0]["prompt_width"]
+
+        charge_prompt = wcw[:, :prompt_width].sum(axis=1)
+        charge_total = wcw.sum(axis=1)
+
+        n_window_samples = wcw.shape[1]
+        noise_floor = 3 * bl_sig * np.sqrt(n_window_samples)
+        psd_param = np.where(charge_total > noise_floor, charge_prompt / charge_total, np.nan)
+
 
         charge_prompt = wcw[:, :200].sum(axis=1)
         charge_total = wcw.sum(axis=1)

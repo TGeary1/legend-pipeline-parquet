@@ -13,7 +13,7 @@ def raw_stage_app(daq_path, base_dir, overwrite=False):
 
 
 @python_app(executors=["dsp"])
-def dsp_stage_app(raw_path, dsp_dir, dsp_config, overwrite=False):
+def dsp_stage_app(raw_path, dsp_dir, window_config="config/dsp_window_configs.yaml", overwrite=False):
     import pyarrow as pa
     pa.set_cpu_count(1)
     pa.set_io_thread_count(1)
@@ -21,7 +21,7 @@ def dsp_stage_app(raw_path, dsp_dir, dsp_config, overwrite=False):
     numba.set_num_threads(1)
 
     from pipeline.process import convert_to_dsp
-    result = convert_to_dsp(raw_path, dsp_dir, dsp_config, overwrite=overwrite)
+    result = convert_to_dsp(raw_path, dsp_dir, window_config, overwrite=overwrite)
     return str(result) if result else None
 
 
