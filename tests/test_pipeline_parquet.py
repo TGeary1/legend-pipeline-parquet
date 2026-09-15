@@ -3,6 +3,7 @@ import pytest
 import numpy as np
 import pyarrow.parquet as pq
 import pyarrow.compute as pc
+import yaml
 from lh5.io import store as lh5store
 
 from pipeline.process import convert_to_raw, convert_to_dsp, compute_psd_params
@@ -125,3 +126,15 @@ def test_select_channel_files_handles_unparseable_names():
     files = ["data/daq/some_weird_filename.BIN"]
     result = select_channel_files(files, wanted_channels=[1])
     assert result == []
+
+
+def test_dsp_window_config_yaml_has_expected_keys():
+    with open("config/dsp_window_configs.yaml") as f:
+        configs = yaml.safe_load(f)
+    assert 5000 in configs
+    assert 3000 in configs
+    for wf_len, cfg in configs.items():
+        assert "baseline_end" in cfg
+        assert "prompt_end" in cfg
+        assert "total_end" in cfg
+        assert "prompt_width" in cfg
