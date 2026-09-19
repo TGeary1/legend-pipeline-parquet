@@ -1,10 +1,13 @@
 # tests/test_calibration.py
+import pytest
+from pathlib import Path
 import numpy as np
 from lh5.io import store as lh5store
 from pipeline.calibration import fit_spe_calibration
 
-def test_spe_calibration_matches_validated_result():
-    tbl = lh5store.LH5Store().read("CompassEvent", "data/hit/DataR_CH1@DT5730_1463_run_260520_1340_liquid_1_hit.lh5")
+
+def test_spe_calibration_matches_validated_result(lh5_reference_hit_path):
+    tbl = lh5store.LH5Store().read("CompassEvent", str(lh5_reference_hit_path))
     charge_total = tbl["charge_total"].nda
 
     result = fit_spe_calibration(
@@ -14,5 +17,5 @@ def test_spe_calibration_matches_validated_result():
     )
 
     assert result["r_squared"] > 0.999
-    assert 42500 < result["gain"] < 43700   # today's validated value ± margin
+    assert 42500 < result["gain"] < 43700
     assert result["gain_err"] < 500
