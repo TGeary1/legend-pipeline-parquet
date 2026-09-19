@@ -9,7 +9,7 @@ def make_local_config(max_threads=4):
     ])
 
 
-def make_config(max_workers_per_node=16, nodes=1, account=None, qos="debug"):
+def make_config(max_workers_per_node=16, nodes=1, account="m2676", qos="debug"):
     from parsl.config import Config
     from parsl.providers import SlurmProvider
     from parsl.launchers import SrunLauncher
@@ -26,7 +26,7 @@ def make_config(max_workers_per_node=16, nodes=1, account=None, qos="debug"):
                 account=account,
                 nodes_per_block=nodes,
                 scheduler_options="#SBATCH -C cpu",
-                worker_init=venv_activate,
+                worker_init='module load conda && conda activate legend-pipeline-parquet',
                 launcher=SrunLauncher(overrides="-c 128"),
                 walltime="00:30:00",
                 cmd_timeout=120,
