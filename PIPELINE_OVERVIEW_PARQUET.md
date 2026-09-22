@@ -288,39 +288,140 @@ legend-pipeline-parquet/
 
 ## 11. Running things
 
+### Local (laptop) — development and fast iteration
+
 ```bash
-# local testing (fast tests always run; slow/data-dependent tests skip
-# gracefully if the large test files aren't present)
+# fast tests always run; slow/data-dependent tests skip gracefully if the
+# large test files aren't present on this machine
 python -m pytest -v
 
-# a real batch, with a limit for cautious first runs against new data
+# sequential (no Parsl), with a limit for cautious first runs against new data
 python run_pipeline.py --daq-dir /path/to/some/DAQ/run_folder --output-dir data --limit 2
+
+# Parsl with local ThreadPoolExecutors — exercises the same three-stage
+# executor wiring as the real NERSC path, without touching Slurm at all
+python test_parsl_local.py   # or equivalent ad hoc script using make_local_config()
 ```
 
-On NERSC, activate the matching conda environment first
-(`conda activate legend-pipeline-parquet`) — see `utils.py` for how this
-gets wired into the Parsl `SlurmProvider`'s `worker_init` for actual
-Perlmutter submission.
+### NERSC / Perlmutter — real production runs
+
+**One-time setup**, per machine/session:
+```bash
+cd /global/cfs/cdirs/m2676/users/<you>/legend-pipeline-parquet
+git pull origin main              # NERSC's checkout can silently fall behind — see §9
+conda activate legend-pipeline-parquet
+python -m pytest -v               # confirm the environment itself is healthy first
+```
+
+**Running a real batch** — `run_parsl_pipeline.py` submits Slurm jobs on
+your behalf via Parsl's `SlurmProvider`; you do not need to be inside an
+`salloc`/`srun` session yourself, just run it from a login node:
+
+```bash
+python run_parsl_pipeline.py \
+  --daq-dir /global/cfs/cdirs/m2676/data/teststands/sarge/sarge9/DAQ/<run_folder> \
+  --output-dir /global/cfs/cdirs/m2676/users/<you>/legend-pipeline-parquet/<output_dir> \
+  --account m2676 \
+  --qos regular \
+  [--limit N]
+```
+
+**Always stage new data before a full run** — this is not optional caution,
+it's how every naming-convention and record-length surprise in this repo's
+history was actually caught (§4, §6): `--limit 2` → `--limit 10` → no
+limit, checking output at each step (§ "Verifying output" below) before
+trusting the next, larger run.
+
+**Watching a submitted job**, in a second terminal:
+```bash
+squeue -u $USER
+```
+
+**After completion, inspect what actually happened** via Slurm accounting
+(note: worker-pool jobs show as `CANCELLED` when Parsl tears them down at
+the end of a successful run — this is expected, not a failure; see §9-style
+note below):
+```bash
+sacct -u $USER --starttime=today -o JobID,JobName,State,Elapsed,Start,End
+```
+
+**If something fails to submit at all**, check `runinfo/<run_number>/` for
+Parsl's own logs and the generated Slurm submit script, and check the
+account's actual QOS limits directly rather than assuming — limits can be
+allocation-specific and differ from NERSC's general documentation
+(confirmed the hard way, see "QOS notes" below):
+```bash
+sacctmgr show assoc user=$USER account=m2676 format=account,qos -p
+sacctmgr show qos <qos_name> format=Name,MaxWall -p
+```
+
+### QOS notes, learned from real submissions on this account
+
+- **`debug`**: `MaxWall` = 30 minutes on this account. Good for the
+  staged `--limit`-based validation runs above; too short for anything
+  beyond a handful of files' worth of dsp-stage work.
+- **`regular_0` / `regular_1`**: what you actually request is plain
+  `qos="regular"` — Slurm internally routes the job into one of these two
+  sub-tiers itself; they are not something you choose directly. `MaxWall`
+  = 2 days on this account, far more headroom than needed so far.
+- A `walltime` of `00:30:00` in `make_config()` has been sufficient for a
+  full 42-file run of `run_1450pm_SAr` (~7.27M events, raw+dsp+hit, all
+  three Parsl executors) under `regular` QOS. Scale up cautiously for
+  substantially larger runs, and check actual elapsed time via `sacct`
+  after the fact rather than guessing further in advance.
+
+### Verifying output — do this every time, not just on the first run of a new dataset
+
+```python
+import pyarrow.parquet as pq
+import numpy as np
+from pathlib import Path
+
+hit_dir = Path("<output_dir>/hit")
+files = sorted(hit_dir.glob("*.parquet"))
+print(f"{len(files)} hit-tier files found")
+for f in files:
+    t = pq.read_table(str(f))
+    psd = t.column("psd_param").to_numpy()
+    print(f.name, "rows:", t.num_rows, "NaN:", np.isnan(psd).sum())
+```
+
+For `run_1450pm_SAr` specifically, a healthy result looks like: every file
+at exactly 174,037 rows except the final one (a shorter tail chunk — CoMPASS
+appears to split output at a fixed row-count boundary), and NaN counts
+(from the noise-floor cut, §-references in the main pipeline doc) clustered
+in the teens-to-thirties with no zero or wildly high outliers. Compare any
+new run's output against this shape before trusting it.
 
 ## 12. What's still open
 
-- **NERSC compute account/QOS** — `m2676` is the working assumption
-  (matches the storage paths used throughout), pending confirmation via
-  Iris that it's also a valid *compute* association, not just storage.
 - **`WANTED_CHANNELS = [1]`** — confirmed as the only channel present
   across all examined runs; still worth confirming with the group that
   channel 1 is definitively the argon-scintillation PMT, not an
   incidental single active channel.
 - **§7's SAr truncated-decay question** — unresolved, blocks any
-  liquid-vs-solid comparison.
+  liquid-vs-solid comparison. Now that a full 42-file run of
+  `run_1450pm_SAr` (~7.27M events) exists, this is worth investigating
+  properly rather than from the earlier small sample.
 - **`medium == "unknown"`** for the plain-numeric-named runs — needs
   clarification from the group on what medium those runs used.
-- **SPE calibration** for the SAr and plain-numeric runs — not yet done.
+- **SPE calibration** for the SAr and plain-numeric runs — not yet done;
+  SAr specifically should wait for the truncation question above.
 - **The `.root` (Hcompass...) file** found alongside some runs' `RAW/`
   directories — not investigated; likely a CoMPASS histogram/summary
   export in ROOT format, unrelated to this pipeline's per-event waveform
   processing, but worth a low-priority confirmation with whoever manages
   the acquisition.
-- **Parsl on real Perlmutter Slurm** — local-executor equivalence is
-  verified; the actual `SlurmProvider` path has not yet been exercised
-  against a real allocation.
+- **The remaining runs under `DAQ/`** (the four other `run_1113am*`
+  directories, plus anything else in the tree) have not yet been
+  processed through this pipeline — `run_1450pm_SAr` is the only run
+  fully validated and run at production scale so far.
+
+### Resolved today, kept here for the record
+
+- **NERSC compute account** — confirmed via Iris and `sacctmgr`: `m2676`
+  is a genuine compute allocation, not storage-only.
+- **Parsl on real Perlmutter Slurm** — fully exercised: single file →
+  small batch (`debug`) → small batch (`regular`, verified numerically
+  identical to `debug`) → 10-file batch → full 42-file production run,
+  all under `regular` QOS, all verified correct.
