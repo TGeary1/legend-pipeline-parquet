@@ -196,26 +196,100 @@ already-corrected waveform slice as an array field
 (`wf_charge_window`). Don't try to reintroduce a `numpy.sum`-in-`dspeed`
 processor — it will very likely hit the same wall again.
 
-## 7. An open, unresolved physics question — flag before using SAr data for anything comparative
+## 7. SAr record-length / truncated-decay question — resolved
 
-The `1450pm_SAr` run's average waveform does **not** fully return to
-baseline by the end of its 3000-sample record (still visibly recovering
-at sample 3000/3000), unlike the liquid run's clean full recovery by
-~sample 2000/5000. This means `total_end: 3000` for that run almost
-certainly **undercounts true total light**, which would systematically
-inflate `psd_param` for every event in that run (smaller denominator).
+Earlier single-file inspection suggested the SAr run's (`1450pm_SAr`)
+average waveform hadn't fully settled by the end of its 3000-sample
+record, raising concern that `total_end: 3000` might systematically
+undercount true total light, inflating `psd_param` for every event in
+that run (smaller denominator) relative to the liquid run.
 
-Consistent with this: the SAr run's `psd_param` distribution's 1st
-percentile (0.138) is over 10x higher than the liquid run's (0.011),
-while the medians are closer (0.408 vs 0.341). This is exactly the pattern
-you'd expect from `total_end` being genuinely too short, not necessarily
-a difference in real singlet/triplet physics between the two media.
+This was resolved two independent ways, using the full 42-file production
+run (§11):
 
-**Do not draw any liquid-vs-solid comparison from current `psd_param` or
-`n_pe` values without first resolving whether the record length was a
-deliberate, sufficient acquisition choice for solid argon, or a limitation
-that needs a longer record in future runs.** This is a real, open question
-for the group — not a pipeline bug to silently work around.
+1. **High-statistics averaging** (870,185 events across 5 files): the
+   averaged waveform's tail (last 50 samples) sits at 0.58% of peak
+   amplitude, and the tail region (last 200 samples) contributes only
+   0.31% of the `charge_total` window's integrated sum. Both negligible —
+   the single-file impression of an unsettled tail was mostly visual noise
+   that washes out with real statistics.
+2. **Corrected time-axis check** (§7a below): at the confirmed 16 ns/sample
+   rate, `total_end: 3000` covers 3000 × 16 = 48 μs of real time —
+   comfortably longer than argon's triplet lifetime (~1.5 μs, liquid-argon
+   reference value). There was never a real risk of the record length
+   being too short for the triplet component specifically.
+
+**Conclusion: `total_end: 3000` for this run is not meaningfully biased by
+truncation.** This means the SAr run's `psd_param` distribution genuinely
+differing from the liquid run's (particularly the 1st percentile — 0.138
+vs 0.011) is likely **real physics** — a difference in prompt/total light
+fraction between solid and liquid argon phases — not a measurement
+artifact. Worth pursuing as an actual analysis result.
+
+## 7a. Waveform sample spacing is 16 ns, not 2 ns — a real correction, and a real DAQ limitation
+
+While investigating §7, cross-referencing `settings.xml`
+(`SRV_PARAM_RECLEN`) against the raw waveform data's own `WaveformTable.dt`
+field revealed that **every run processed so far (liquid, SAr, and the
+plain-numeric-named run) records waveforms at 16 ns/sample, not the 2
+ns/sample (500 MS/s) native rate of the DT5730 digitizer.** Confirmed
+directly from data (`pc.struct_field(waveform, "dt")`, uniform across
+sampled rows in every file checked), not inferred from settings alone.
+
+This is consistent with CoMPASS applying **onboard presumming**: internally
+sampling at the native 2 ns rate, then averaging every 8 consecutive raw
+samples into 1 before writing to the `.BIN` file (2 ns × 8 = 16 ns). This
+is standard CoMPASS/DPP-PSD behavior, not a pipeline bug — but its
+consequences hadn't been accounted for anywhere physical-time figures were
+derived from sample counts.
+
+**What this affects:**
+- **Nothing in the actual pipeline code or dsp config** — every window
+  boundary in `dsp_window_configs.yaml` is defined in sample-index terms
+  (`baseline_end`, `total_end`, etc.), which remain structurally correct
+  regardless of `dt`. Confirmed via full repo grep — no hardcoded
+  `sample_ns`/`2.0`/nanosecond assumption exists in `pipeline/`, `config/`,
+  or `tests/`.
+- **The Gaussian-filter/rise-time systematics investigation** (conducted
+  earlier, on the liquid run) used an incorrect `sample_ns=2.0` when
+  converting filter strength (σ, in samples) and measured rise times into
+  physical nanoseconds. The *relative* pattern found (σ≤3 samples safe,
+  σ=5 introduces a measurable bias) is still numerically correct in sample
+  units, but every nanosecond figure reported from it was wrong by a factor
+  of 8:
+
+  | σ (samples) | Reported (wrong, 2 ns/sample) | **Actual (16 ns/sample)** |
+  |---|---|---|
+  | 2–3 | 4–6 ns | **32–48 ns** |
+  | 5 | 10 ns | **80 ns** |
+
+  Measured 10-90% rise time on the clean, high-amplitude band: reported
+  as 56–60 ns, actually **448–480 ns**.
+
+**A more important consequence than the unit correction:** argon's singlet
+scintillation component has a lifetime of ~6 ns (liquid-argon reference
+value). With a true 16 ns sample spacing, **a single raw sample already
+spans nearly 3x the entire singlet decay time** — this holds even with *no*
+smoothing applied at all (σ=0). This is not a smoothing-strength tradeoff
+to tune; it is a fundamental acquisition-resolution limit. **The singlet
+component cannot be time-resolved from this presummed data, under any
+offline analysis choice.** The Gaussian-filter question ("how much
+smoothing is safe") remains meaningful for the measured ~450 ns rise-time
+metric and the microsecond-scale triplet decay, but was never capable of
+resolving the singlet in the first place.
+
+**Corrected recommendation** (relative to the rise-time/triplet timescale
+this data can actually measure): σ up to 3 samples (48 ns) remains safe —
+bias stays near 0% relative to the ~450 ns rise time. σ=5 (80 ns)
+introduces the same ~7% relative bias found originally, now correctly
+understood as 80 ns against a 448 ns baseline rather than "comparable to
+the singlet lifetime."
+
+**Open question for the group, not a pipeline issue:** if resolving the
+singlet component directly is important to this project's goals, it
+requires a DAQ reconfiguration (disabling or reducing onboard presumming)
+for *future* acquisitions — no amount of offline reprocessing of existing
+data can recover time resolution that was discarded at acquisition time.
 
 ## 8. SPE calibration status
 
@@ -399,19 +473,31 @@ new run's output against this shape before trusting it.
   across all examined runs; still worth confirming with the group that
   channel 1 is definitively the argon-scintillation PMT, not an
   incidental single active channel.
-- **§7's SAr truncated-decay question** — unresolved, blocks any
-  liquid-vs-solid comparison. Now that a full 42-file run of
-  `run_1450pm_SAr` (~7.27M events) exists, this is worth investigating
-  properly rather than from the earlier small sample.
-- **`medium == "unknown"`** for the plain-numeric-named runs — needs
-  clarification from the group on what medium those runs used.
-- **SPE calibration** for the SAr and plain-numeric runs — not yet done;
-  SAr specifically should wait for the truncation question above.
-- **The `.root` (Hcompass...) file** found alongside some runs' `RAW/`
-  directories — not investigated; likely a CoMPASS histogram/summary
-  export in ROOT format, unrelated to this pipeline's per-event waveform
-  processing, but worth a low-priority confirmation with whoever manages
-  the acquisition.
+- **The singlet-resolution DAQ limitation (§7a)** — a real, open question
+  for the group: does resolving argon's ~6 ns singlet component matter for
+  this project's goals? If so, future acquisitions need onboard presumming
+  disabled or reduced; no offline fix is possible for already-recorded
+  data. Communicate the §7a correction (rise-time/filter figures were off
+  by 8x) to whoever received the original, uncorrected numbers.
+- **`medium == "unknown"`** for the plain-numeric-named run
+  (`run_260521_1023`) — checked `run.info` and `settings.xml` for this run
+  specifically (see below); neither records a medium
+  (`SW_PARAMETER_CH_LABEL` is the generic default `"CH"`, not a custom
+  operator label). This looks like a dead end on the file-metadata side —
+  genuinely needs a direct answer from whoever ran this session, not
+  further file archaeology.
+- **SPE calibration** for the SAr and plain-numeric runs — not yet done.
+  SAr is no longer blocked (§7 resolved) and can proceed; the
+  plain-numeric run still needs its raw/dsp/hit processing run at all
+  (only a `--limit 2` test was planned, not yet executed as of this
+  writing).
+- **The `.root` (Hcompass.../HcompassF.../HcompassR...) files and
+  `run.cae`** found alongside runs' `RAW/`/`FILTERED`/`OFFLINE`
+  directories — not investigated in detail. `run.info` and `settings.xml`
+  (see below) turned out to be far more useful for acquisition metadata;
+  the `.root` files are likely CoMPASS's own histogram/spectrum exports
+  and probably don't carry anything this pipeline needs, but this is an
+  assumption, not a confirmed fact.
 - **The remaining runs under `DAQ/`** (the four other `run_1113am*`
   directories, plus anything else in the tree) have not yet been
   processed through this pipeline — `run_1450pm_SAr` is the only run
@@ -425,3 +511,41 @@ new run's output against this shape before trusting it.
   small batch (`debug`) → small batch (`regular`, verified numerically
   identical to `debug`) → 10-file batch → full 42-file production run,
   all under `regular` QOS, all verified correct.
+- **§7's SAr truncated-decay question** — resolved; see §7 above. Not a
+  real bias; `psd_param` differences between SAr and liquid are likely
+  genuine physics.
+- **§7a's sample-spacing correction** — discovered and quantified;
+  affects only previously-reported physical-time figures from the
+  Gaussian-filter investigation, not any pipeline code or config.
+
+### Useful acquisition-metadata files discovered today, worth checking for every run going forward
+
+Each run directory (e.g. `DAQ/<run_name>/`) contains, alongside `RAW/`:
+- **`run.info`** — plain-text run accounting: start/stop time, real
+  duration, per-board readout rate, onboard rejection counts (all zero for
+  every run checked so far — no onboard filtering active), input/output
+  count rates (real dead time present — `icr`/`ocr` ratio ~10:1 for
+  `run_260521_1023`), and the onboard energy-calibration coefficients
+  (identity, `c0=0, c1=1, c2=0` — confirms CoMPASS's `energy_calibrated`
+  field is genuinely unused, not something the pipeline is missing).
+- **`settings.xml`** — the real DAQ configuration: trigger threshold
+  (`SRV_PARAM_CH_THRESHOLD`), polarity (`SRV_PARAM_CH_POLARITY`,
+  confirmed `POLARITY_NEGATIVE`), pre-trigger (`SRV_PARAM_CH_PRETRG`),
+  CoMPASS's own PSD gate widths (`SRV_PARAM_CH_GATE`,
+  `SRV_PARAM_CH_GATESHORT`, `SRV_PARAM_CH_GATEPRE`), record length
+  (`SRV_PARAM_RECLEN`), channel enable state and label
+  (`SRV_PARAM_CH_ENABLED`, `SW_PARAMETER_CH_LABEL`), and whether software
+  PSD/energy/time cuts were active (`SW_PARAMETER_CH_*CUTENABLE` — all
+  `false` for `run_260521_1023`, i.e. unfiltered data). Parse with
+  `xml.etree.ElementTree`, not `grep` — settings are stored as
+  `<entry><key>NAME</key><value>...</value></entry>` blocks, not
+  directly-named tags.
+
+**Note:** this pipeline's own `charge_prompt`/`charge_total`/`psd_param`
+windows were derived independently (by eye, from plotted average
+waveforms), not from CoMPASS's own `SRV_PARAM_CH_GATE*` values. Both are
+legitimate methodologies, but they are not the same definition of
+"prompt"/"total" — worth a deliberate decision (not yet made) about
+whether to align the pipeline's windows with CoMPASS's own gate
+definition, especially if comparing results against anything computed
+from CoMPASS's onboard `energy`/`energy_short` fields directly.
