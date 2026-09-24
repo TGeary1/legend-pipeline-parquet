@@ -1,5 +1,3 @@
-
-#Local thread pools for testing without Slurm
 def make_local_config(max_threads=4):
     from parsl.config import Config
     from parsl.executors import ThreadPoolExecutor
@@ -11,15 +9,21 @@ def make_local_config(max_threads=4):
     ])
 
 
-
-#Executors on Perlmutter nodes
-def make_config(max_workers_per_node=16, nodes=1, account="m2676", qos="debug"):
+def make_config(max_workers_per_node=16, nodes=1, account="m2676", qos="regular"):
     from parsl.config import Config
     from parsl.providers import SlurmProvider
     from parsl.launchers import SrunLauncher
     from parsl.executors import HighThroughputExecutor
 
-    venv_activate = "source /global/path/to/legend-pipeline-parquet/venv/bin/activate"
+    # Compute-node workers don't inherit the login shell's directory or
+    # PYTHONPATH; without this, `import pipeline` fails on the workers.
+    repo_dir = "/global/cfs/cdirs/m2676/users/tgeary/legend-pipeline-parquet"
+    worker_init = (
+        f"cd {repo_dir} && "
+        "module load conda && "
+        "conda activate legend-pipeline-parquet && "
+        f"export PYTHONPATH={repo_dir}:$PYTHONPATH"
+    )
 
     def make_executor(label):
         return HighThroughputExecutor(
@@ -30,7 +34,7 @@ def make_config(max_workers_per_node=16, nodes=1, account="m2676", qos="debug"):
                 account=account,
                 nodes_per_block=nodes,
                 scheduler_options="#SBATCH -C cpu",
-                worker_init='module load conda && conda activate legend-pipeline-parquet',
+                worker_init=worker_init,
                 launcher=SrunLauncher(overrides="-c 128"),
                 walltime="00:30:00",
                 cmd_timeout=120,
