@@ -6,7 +6,7 @@ import numpy as np
 import pyarrow as pa
 import yaml
 from pipeline.dsp_config import build_dsp_config
-from pipeline.calibration import get_run_key
+from build_raw_compass import parse_run_info
 from lh5.io import store as lh5store
 from pathlib import Path
 from daq2lh5 import build_raw
@@ -137,8 +137,6 @@ def sequence_key(path):
     return int(m.group(1)) if m else 0
 
 
-from pipeline.calibration import get_run_key
-
 def compute_psd_params(dsp_path, hit_dir, calibration_config="config/spe_calibration.yaml", window_config="config/dsp_window_configs.yaml", overwrite=False):
     """Compute charge_prompt, charge_total, psd_param (and n_pe, if calibrated)
     from a dsp-tier Parquet file's wf_charge_window column."""
@@ -199,7 +197,8 @@ def compute_psd_params(dsp_path, hit_dir, calibration_config="config/spe_calibra
                .append_column("psd_param", pa.array(psd_param))
         )
 
-        run_key = get_run_key(dsp_path)
+        run_base, _, _ = parse_run_info(Path(dsp_path).stem)
+        run_key = run_base
         cal_path = Path(calibration_config)
         if cal_path.exists():
             with open(cal_path) as f:
