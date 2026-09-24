@@ -1,3 +1,5 @@
+
+#Local thread pools for testing without Slurm
 def make_local_config(max_threads=4):
     from parsl.config import Config
     from parsl.executors import ThreadPoolExecutor
@@ -9,13 +11,15 @@ def make_local_config(max_threads=4):
     ])
 
 
+
+#Executors on Perlmutter nodes
 def make_config(max_workers_per_node=16, nodes=1, account="m2676", qos="debug"):
     from parsl.config import Config
     from parsl.providers import SlurmProvider
     from parsl.launchers import SrunLauncher
     from parsl.executors import HighThroughputExecutor
 
-    venv_activate = "source /global/path/to/legend-pipeline-parquet/venv/bin/activate"  # update to real NERSC path
+    venv_activate = "source /global/path/to/legend-pipeline-parquet/venv/bin/activate"
 
     def make_executor(label):
         return HighThroughputExecutor(

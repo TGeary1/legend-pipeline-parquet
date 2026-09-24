@@ -15,6 +15,8 @@ from dspeed import build_dsp
 
 log = logging.getLogger(__name__)
 
+
+#Runs the raw conversion app with overwrite/skip options and error isolation. 
 def convert_to_raw(daq_path, base_dir, overwrite=False):
     """base_dir should be the parent of a 'raw/' subdirectory that build_raw_app writes into."""
     from build_raw_compass import build_raw_app
@@ -41,6 +43,7 @@ def convert_to_raw(daq_path, base_dir, overwrite=False):
     return Path(result)
 
 
+#Measures waveform length from data and builds dsp
 def convert_to_dsp(raw_path, dsp_dir, window_config="config/dsp_window_configs.yaml", overwrite=False):
     import pyarrow.parquet as pq
     import pyarrow.compute as pc
@@ -71,6 +74,7 @@ def convert_to_dsp(raw_path, dsp_dir, window_config="config/dsp_window_configs.y
             log.error(f"No dsp window config for wf_len={wf_len} in {window_config} — "
                        f"add an entry before processing this run. File: {raw_path.name}")
             return None
+
         cfg = configs[wf_len]
         log.info(f"Using dsp windows for wf_len={wf_len}: {cfg.get('notes', '')}")
 
@@ -94,6 +98,7 @@ def convert_to_dsp(raw_path, dsp_dir, window_config="config/dsp_window_configs.y
     return dsp_path
 
 
+#Chains the three conversion stages for a single file
 def process_file(daq_path, base_dir, dsp_config="config/compass-dsp-config.json",
                   calibration_config="config/spe_calibration.yaml", overwrite=False):
     daq_path = Path(daq_path)
@@ -117,6 +122,7 @@ def process_file(daq_path, base_dir, dsp_config="config/compass-dsp-config.json"
     return hit_path
 
 
+#Keeps only files for desired channels
 def select_channel_files(daq_files, wanted_channels):
     """Filter a list of DAQ file paths, keeping only the given CoMPASS channel numbers."""
     pattern = re.compile(r"CH(\d+)@.*?(?:_(\d+))?\.BIN$", re.IGNORECASE)
@@ -130,6 +136,7 @@ def select_channel_files(daq_files, wanted_channels):
         if ch in wanted_channels:
             selected.append(f)
     return selected
+
 
 def sequence_key(path):
     """Sort key so the unnumbered file sorts before _1, _2, _3, etc."""

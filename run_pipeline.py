@@ -1,4 +1,3 @@
-# run_pipeline.py
 import argparse
 import logging
 from pathlib import Path
@@ -8,6 +7,8 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 
 WANTED_CHANNELS = [1]  #Only channel [1] present within examined runs
 
+
+#Sequential batch runner. Non-parsl
 def main(daq_dir, output_dir, limit=None):
     base_dir = Path(output_dir)
     for d in ("raw", "dsp", "hit"):

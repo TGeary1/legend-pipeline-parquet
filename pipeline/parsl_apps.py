@@ -1,6 +1,8 @@
 from parsl import python_app
 
 
+#Parsl wrapper for the three conversion stages. Each has it's own executor and limited to one thread per worker.
+
 @python_app(executors=["raw"])
 def raw_stage_app(daq_path, base_dir, overwrite=False):
     import pyarrow as pa

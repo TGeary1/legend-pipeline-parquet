@@ -1,6 +1,6 @@
 import re
 
-
+#Reads a filename to parse run id, sequence number and medium (if applicable)
 def parse_run_info(stem):
     m = re.search(r"_run_(.+)$", stem)
     if m is None:
@@ -28,6 +28,7 @@ def parse_run_info(stem):
     return run_base, seq, medium
 
 
+#Streams .BIN through CoMPASS decoder in chunks, writing a compressed parquet
 def build_raw_app(inp, out_dir):
     from pathlib import Path
 
