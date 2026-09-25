@@ -226,70 +226,50 @@ vs 0.011) is likely **real physics** — a difference in prompt/total light
 fraction between solid and liquid argon phases — not a measurement
 artifact. Worth pursuing as an actual analysis result.
 
-## 7a. Waveform sample spacing is 16 ns, not 2 ns — a real correction, and a real DAQ limitation
+## 7a. Waveform sample spacing is 2 ns — correcting an earlier "16 ns" conclusion
 
-While investigating §7, cross-referencing `settings.xml`
-(`SRV_PARAM_RECLEN`) against the raw waveform data's own `WaveformTable.dt`
-field revealed that **every run processed so far (liquid, SAr, and the
-plain-numeric-named run) records waveforms at 16 ns/sample, not the 2
-ns/sample (500 MS/s) native rate of the DT5730 digitizer.** Confirmed
-directly from data (`pc.struct_field(waveform, "dt")`, uniform across
-sampled rows in every file checked), not inferred from settings alone.
+Waveform samples are **2 ns apart**, the DT5730's native 500 MS/s rate.
+An earlier version of this section claimed 16 ns (from assumed onboard
+8x presumming). That was wrong.
 
-This is consistent with CoMPASS applying **onboard presumming**: internally
-sampling at the native 2 ns rate, then averaging every 8 consecutive raw
-samples into 1 before writing to the `.BIN` file (2 ns × 8 = 16 ns). This
-is standard CoMPASS/DPP-PSD behavior, not a pipeline bug — but its
-consequences hadn't been accounted for anywhere physical-time figures were
-derived from sample counts.
+**Where 16 ns came from:** the `dt` field of every decoded waveform reads
+16.0. That value is not measured. CoMPASS event records store no sample
+period, and `daq2lh5`'s CoMPASS decoder sets it as a hardcoded default
+(`compass_event_decoder.py`: `"dt": 16,  # override if a different clock
+rate is used`).
+
+**Evidence for 2 ns**, from each run's own `settings.xml`:
+
+| Run | `SRV_PARAM_RECLEN` | Samples | Spacing |
+| --- | --- | --- | --- |
+| `260520_1340_liquid_1` | 10,000 ns | 5000 | 2 ns |
+| `1450pm_SAr` | 6,000 ns | 3000 | 2 ns |
+| `260521_1023` | 10,000 ns | 5000 | 2 ns |
+
+The channel pre-trigger (`SRV_PARAM_CH_PRETRG` = 1000 ns) equals sample
+500 at 2 ns, matching the observed pulse onset near samples 450–480.
+No decimation or presumming key exists in `settings.xml`.
 
 **What this affects:**
-- **Nothing in the actual pipeline code or dsp config** — every window
-  boundary in `dsp_window_configs.yaml` is defined in sample-index terms
-  (`baseline_end`, `total_end`, etc.), which remain structurally correct
-  regardless of `dt`. Confirmed via full repo grep — no hardcoded
-  `sample_ns`/`2.0`/nanosecond assumption exists in `pipeline/`, `config/`,
-  or `tests/`.
-- **The Gaussian-filter/rise-time systematics investigation** (conducted
-  earlier, on the liquid run) used an incorrect `sample_ns=2.0` when
-  converting filter strength (σ, in samples) and measured rise times into
-  physical nanoseconds. The *relative* pattern found (σ≤3 samples safe,
-  σ=5 introduces a measurable bias) is still numerically correct in sample
-  units, but every nanosecond figure reported from it was wrong by a factor
-  of 8:
+- **Pipeline code and dsp config: nothing.** All windows are defined in
+  sample indices, and no code reads `dt`.
+- **Gaussian-filter study:** its original figures stand (σ ≤ 3 samples =
+  6 ns safe; σ = 5 = 10 ns introduces ~7% rise-time bias; rise time
+  56–60 ns). The interim "8x larger" correction is withdrawn.
+- **Singlet resolution:** the ~6 ns singlet spans ~3 samples. Its light
+  is captured in the prompt window, but its lifetime can't be fit from
+  this data.
+- **Deconvolution (`spe_deconvolution_analysis.py`):** at 2 ns, the
+  liquid biexponential fit gives τ₁ ≈ 34 ns and τ₂ ≈ 294 ns. The fit
+  covered only 300 samples (600 ns), too short to constrain a ~1.5 μs
+  triplet. Not a lifetime result; the fit range needs reworking.
+- **Stored metadata:** every raw/dsp file written so far carries
+  `dt = 16`. Treat it as wrong. Planned fix: override `dt` to 2 in
+  `build_raw_compass.py` and reprocess raw.
 
-  | σ (samples) | Reported (wrong, 2 ns/sample) | **Actual (16 ns/sample)** |
-  |---|---|---|
-  | 2–3 | 4–6 ns | **32–48 ns** |
-  | 5 | 10 ns | **80 ns** |
-
-  Measured 10-90% rise time on the clean, high-amplitude band: reported
-  as 56–60 ns, actually **448–480 ns**.
-
-**A more important consequence than the unit correction:** argon's singlet
-scintillation component has a lifetime of ~6 ns (liquid-argon reference
-value). With a true 16 ns sample spacing, **a single raw sample already
-spans nearly 3x the entire singlet decay time** — this holds even with *no*
-smoothing applied at all (σ=0). This is not a smoothing-strength tradeoff
-to tune; it is a fundamental acquisition-resolution limit. **The singlet
-component cannot be time-resolved from this presummed data, under any
-offline analysis choice.** The Gaussian-filter question ("how much
-smoothing is safe") remains meaningful for the measured ~450 ns rise-time
-metric and the microsecond-scale triplet decay, but was never capable of
-resolving the singlet in the first place.
-
-**Corrected recommendation** (relative to the rise-time/triplet timescale
-this data can actually measure): σ up to 3 samples (48 ns) remains safe —
-bias stays near 0% relative to the ~450 ns rise time. σ=5 (80 ns)
-introduces the same ~7% relative bias found originally, now correctly
-understood as 80 ns against a 448 ns baseline rather than "comparable to
-the singlet lifetime."
-
-**Open question for the group, not a pipeline issue:** if resolving the
-singlet component directly is important to this project's goals, it
-requires a DAQ reconfiguration (disabling or reducing onboard presumming)
-for *future* acquisitions — no amount of offline reprocessing of existing
-data can recover time resolution that was discarded at acquisition time.
+**Lesson:** a field present in decoded data is not necessarily a
+measurement. Check where a decoder populates a value before trusting it,
+and cross-check against the DAQ's own configuration.
 
 ## 8. SPE calibration status
 

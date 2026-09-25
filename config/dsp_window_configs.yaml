@@ -11,4 +11,4 @@
   prompt_end: 680
   prompt_width: 200
   total_end: 3000
-  notes: "solid argon, run 1450pm. At the confirmed 16 ns/sample rate, total_end covers 48 microseconds — well beyond the ~1.5 microsecond triplet lifetime reference from liquid argon literature. Truncation concern (raised from a single-file visual inspection) was resolved via high-statistics check: tail contributes only 0.31% of total charge_total window sum (see PIPELINE_OVERVIEW_PARQUET.md)."
+  notes: "solid argon, run 1450pm. At 2 ns/sample the record covers 6 microseconds (about four triplet lifetimes). Truncation checked empirically: last 200 samples hold 0.31% of the charge_total window sum (see PIPELINE_OVERVIEW_PARQUET.md §7)."

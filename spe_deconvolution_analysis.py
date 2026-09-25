@@ -14,25 +14,16 @@ Pipeline:
      the decay (it is not, for the liquid run validated so far — see
      window-sensitivity check) and fit a biexponential model instead.
 
-Validated on the liquid run (260520_1340_liquid_1): tau1 ~ 276 ns
-(likely an instrumental/deconvolution-residual component, not read as a
-fundamental scintillation lifetime), tau2 ~ 2355 ns (physically plausible
-as an argon triplet-lifetime measurement, order-of-magnitude consistent
-with liquid-argon literature ~1.5 microseconds, though notably longer —
-worth cross-checking against the SAr run before treating as final).
+First pass on the liquid run (260520_1340_liquid_1): biexponential fit
+gave tau1 ~ 34 ns and tau2 ~ 294 ns. This is NOT a triplet measurement:
+the fit spanned only 300 samples (600 ns), too short to constrain a
+~1.5 microsecond triplet. Extend the fit range before quoting lifetimes.
 
-IMPORTANT CAVEATS, carried over from the pipeline's documentation:
-  - Waveform sample spacing is confirmed 16 ns/sample (CoMPASS onboard
-    8x presumming), not the native 2 ns/sample digitizer rate. All time
-    conversions in this script use SAMPLE_NS = 16.0. Do not assume 2 ns
-    if reusing this code elsewhere.
-  - Argon's ~6 ns singlet lifetime is NOT resolvable at 16 ns/sample,
-    under any analysis choice. Do not interpret any fitted timescale from
-    this script as "the singlet component."
-  - The Wiener regularization's noise_power_estimate is a real tuning
-    choice, not a fixed constant — see resolved-region-sensitivity notes
-    inline. Results should be checked against at least one alternative
-    noise estimate before being treated as final.
+  - Waveform sample spacing is 2 ns/sample. daq2lh5's CoMPASS decoder
+    stores dt = 16 as a hardcoded default; ignore it. All time
+    conversions here use SAMPLE_NS = 2.0.
+  - Argon's ~6 ns singlet spans only ~3 samples. Its light lands in the
+    prompt window, but its lifetime cannot be fit from this data.
 
 Usage:
     python spe_deconvolution_analysis.py \
@@ -57,9 +48,7 @@ from scipy.optimize import curve_fit
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
 
-SAMPLE_NS = 16.0  # confirmed from WaveformTable.dt; CoMPASS onboard 8x presumming of the
-                  # DT5730's native 2 ns/sample (500 MS/s) rate. See PIPELINE_OVERVIEW_PARQUET.md §7a.
-
+SAMPLE_NS = 2.0  # confirmed from WaveformTable
 
 def load_wf_charge_window(dsp_path):
     """Extract wf_charge_window as a plain (n_events, n_samples) numpy array."""
