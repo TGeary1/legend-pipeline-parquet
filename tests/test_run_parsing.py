@@ -34,3 +34,19 @@ def test_parse_run_info_raises_on_no_run_segment():
     import pytest
     with pytest.raises(ValueError):
         parse_run_info("SomeUnrelatedFilename")
+
+def test_parse_run_info_gas():
+    run_base, seq, medium = parse_run_info("DataR_CH1@DT5730_1463_run_260520_1239_gas_1")
+    assert run_base == "260520_1239"
+    assert seq == 1
+    assert medium == "gas"
+
+def test_parse_run_info_date_time_unnumbered():
+    # the bug: trailing _1447 was read as sequence 1447
+    assert parse_run_info("DataR_CH1@DT5730_1463_run_260520_1447") == ("260520_1447", 0, "unknown")
+
+def test_parse_run_info_date_time_numbered():
+    assert parse_run_info("DataR_CH1@DT5730_1463_run_260520_1447_5") == ("260520_1447", 5, "unknown")
+
+def test_parse_run_info_gas_unnumbered():
+    assert parse_run_info("DataR_CH1@DT5730_1463_run_260520_1239_gas") == ("260520_1239", 0, "gas")

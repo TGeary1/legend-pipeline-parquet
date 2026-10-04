@@ -1,8 +1,10 @@
+import os
 import logging
 import warnings
 import re
 import lgdo
 import numpy as np
+import pyarrow.parquet as pq
 import pyarrow as pa
 import yaml
 from pipeline.dsp_config import build_dsp_config
@@ -15,6 +17,17 @@ from dspeed import build_dsp
 
 log = logging.getLogger(__name__)
 
+def atomic_write_table(table, path, **kwargs):
+    """Write to '<name>.partial', then rename. A crash mid-write leaves only the
+    .partial file, which skip-if-exists ignores, never a truncated .parquet."""
+    path = Path(path)
+    tmp = path.with_name(path.name + ".partial")
+    try:
+        pq.write_table(table, str(tmp), **kwargs)
+        os.replace(tmp, path)
+    finally:
+        if tmp.exists():
+            tmp.unlink()
 
 #Runs the raw conversion app with overwrite/skip options and error isolation. 
 def convert_to_raw(daq_path, base_dir, overwrite=False):
@@ -89,7 +102,7 @@ def convert_to_dsp(raw_path, dsp_dir, window_config="config/dsp_window_configs.y
         for col in provenance_cols:
             out_arrow = out_arrow.append_column(col, full_table.column(col))
 
-        pq.write_table(out_arrow, str(dsp_path), compression="lz4")
+        atomic_write_table(out_arrow, dsp_path, compression="lz4")
     except Exception:
         log.exception(f"FAILED dsp conversion: {raw_path}")
         return None
@@ -219,7 +232,7 @@ def compute_psd_params(dsp_path, hit_dir, calibration_config="config/spe_calibra
         else:
             log.warning(f"Calibration config {cal_path} not found — n_pe omitted")
 
-        pq.write_table(out, str(hit_path), compression="lz4")
+        atomic_write_table(out, hit_path, compression="lz4")
     except Exception:
         log.exception(f"FAILED hit-tier computation: {dsp_path}")
         return None

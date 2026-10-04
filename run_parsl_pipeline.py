@@ -29,13 +29,14 @@ from pipeline.parsl_apps import raw_stage_app, dsp_stage_app, hit_stage_app
 from pipeline.process import select_channel_files
  
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+logging.getLogger("parsl").setLevel(logging.INFO)
  
 WANTED_CHANNELS = [1]  # only channel present across all examined runs
  
  
-def main(daq_dir, output_dir, account, qos, limit=None,
+def main(daq_dir, output_dir, account, qos, limit=None, walltime=None,
          calibration_config="config/spe_calibration.yaml"):
-    config = make_config(account=account, qos=qos)
+    config = make_config(account=account, qos=qos, walltime=walltime)
     parsl.load(config)
  
     try:
@@ -86,5 +87,7 @@ if __name__ == "__main__":
     parser.add_argument("--qos", default="debug",
                         help="Slurm QOS: 'debug' (30 min max) for staged tests, 'regular' for production")
     parser.add_argument("--limit", type=int, default=None, help="Only process the first N selected files")
+    parser.add_argument("--walltime", default=None,
+                        help="Slurm walltime HH:MM:SS (default: 30 min for debug, 2 h for regular)")    
     args = parser.parse_args()
-    main(args.daq_dir, args.output_dir, args.account, args.qos, limit=args.limit)
+    main(args.daq_dir, args.output_dir, args.account, args.qos, walltime=args.walltime, limit=args.limit)
