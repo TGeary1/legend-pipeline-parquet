@@ -38,7 +38,7 @@ def make_config(max_workers_per_node=16, nodes=1, account="m2676", qos="regular"
             label=label,
             cores_per_worker=2,
             provider=SlurmProvider(
-                qos,
+                qos=qos,
                 account=account,
                 nodes_per_block=nodes,
                 scheduler_options="#SBATCH -C cpu",
