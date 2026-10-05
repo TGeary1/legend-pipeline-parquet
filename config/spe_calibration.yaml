@@ -1,19 +1,24 @@
-# config/spe_calibration.yaml
-260520_1340:
+'260520_1340':
   gain: 43076.6
   gain_err: 133.3
+  method: self-calibration from low-charge population, charge_total field
+  n_peaks_used: 4
   pedestal: 883.1
   pedestal_err: 364.9
   r_squared: 0.999981
-  n_peaks_used: 4
-  method: "self-calibration from low-charge population, charge_total field"
-
-
 1450pm:
   gain: 28097.3
   gain_err: 24.3
+  method: self-calibration from low-charge population, charge_total field
+  n_peaks_used: 4
   pedestal: 185.1
   pedestal_err: 66.5
   r_squared: 0.999999
+'260520_1239':
+  gain: 41512.8
+  gain_err: 11.1
+  method: self-calibration from low-charge population, charge_total field
   n_peaks_used: 4
-  method: "self-calibration from low-charge population, charge_total field"
+  pedestal: 918.3
+  pedestal_err: 30.4
+  r_squared: 1.0
