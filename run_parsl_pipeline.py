@@ -32,6 +32,20 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 logging.getLogger("parsl").setLevel(logging.INFO)
  
 WANTED_CHANNELS = [1]  # only channel present across all examined runs
+
+def gather(futures, stage):
+    """Collect results, logging failed tasks instead of crashing the whole run.
+    A crash would trigger cleanup, which cancels every worker mid-write."""
+    paths = []
+    for f in futures:
+        try:
+            p = f.result()
+        except Exception as e:
+            logging.error(f"{stage} task failed: {type(e).__name__}: {e}")
+            continue
+        if p is not None:
+            paths.append(p)
+    return paths
  
  
 def main(daq_dir, output_dir, account, qos, limit=None, walltime=None,
@@ -55,18 +69,18 @@ def main(daq_dir, output_dir, account, qos, limit=None, walltime=None,
  
         # Stage 1: raw (barrier: all finish before dsp starts)
         raw_futures = [raw_stage_app(str(f), str(base_dir), overwrite=False) for f in daq_files]
-        raw_paths = [p for p in (f.result() for f in raw_futures) if p is not None]
+        raw_paths = gather(raw_futures, "raw")
         logging.info(f"raw: {len(raw_paths)}/{len(daq_files)} succeeded")
  
         # Stage 2: dsp
         dsp_futures = [dsp_stage_app(p, str(base_dir / "dsp"), overwrite=False) for p in raw_paths]
-        dsp_paths = [p for p in (f.result() for f in dsp_futures) if p is not None]
+        dsp_paths = gather(dsp_futures, "dsp")
         logging.info(f"dsp: {len(dsp_paths)}/{len(raw_paths)} succeeded")
  
         # Stage 3: hit
         hit_futures = [hit_stage_app(p, str(base_dir / "hit"), calibration_config, overwrite=False)
                        for p in dsp_paths]
-        hit_paths = [p for p in (f.result() for f in hit_futures) if p is not None]
+        hit_paths = gather(hit_futures, "hit")
         logging.info(f"hit: {len(hit_paths)}/{len(dsp_paths)} succeeded")
  
         n_failed = len(daq_files) - len(hit_paths)
