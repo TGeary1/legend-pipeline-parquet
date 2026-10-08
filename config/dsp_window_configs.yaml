@@ -1,10 +1,10 @@
 # config/dsp_window_configs.yaml
 5000:
   baseline_end: 450
-  prompt_end: 650
-  prompt_width: 200
+  prompt_end: 730
+  prompt_width: 280
   total_end: 4500
-  notes: "liquid argon, validated against run 260520_1340_liquid_1"
+  notes: "May 20-21 setup (gas, liquid, solid). Prompt window = 280 samples from the charge-window start: pulse onset is ~30 samples in, so this is ~500 ns (250 samples at 2 ns) after onset, per advisor."
 
 3000:
   baseline_end: 480

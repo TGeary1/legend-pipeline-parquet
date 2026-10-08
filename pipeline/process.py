@@ -29,6 +29,30 @@ def atomic_write_table(table, path, **kwargs):
         if tmp.exists():
             tmp.unlink()
 
+JUMP_LAG = 10      # 10 samples = 20 ns, about one photon's rise time
+JUMP_START = 300   # 0.6 us into the charge window: past the main pulse peak
+
+
+def max_rise(wcw, lag=JUMP_LAG, start=JUMP_START, chunk=5000):
+    """Largest rise over any `lag` samples after `start`, per event, in ADC.
+    Late argon light arrives one photon at a time (~1 PE steps); a sudden
+    multi-PE rise is a second, unrelated event (pileup). Computed in chunks
+    so the difference array never holds a whole file at once."""
+    out = np.empty(len(wcw), dtype=np.float32)
+    for i in range(0, len(wcw), chunk):
+        w = wcw[i:i + chunk]
+        out[i:i + chunk] = (w[:, start + lag:] - w[:, start:-lag]).max(axis=1)
+    return out
+
+
+def spe_pulse_height(wcw, n_pe, lo=0.85, hi=1.15, min_events=1000):
+    """Peak height (ADC) of this file's average single-photoelectron pulse.
+    Returns None if there are too few 1 PE events for a reliable average."""
+    sel = (n_pe > lo) & (n_pe < hi)
+    if sel.sum() < min_events:
+        return None
+    return float(wcw[sel].mean(axis=0).max())
+
 #Runs the raw conversion app with overwrite/skip options and error isolation. 
 def convert_to_raw(daq_path, base_dir, overwrite=False):
     """base_dir should be the parent of a 'raw/' subdirectory that build_raw_app writes into."""
@@ -157,7 +181,7 @@ def sequence_key(path):
     return int(m.group(1)) if m else 0
 
 
-def compute_psd_params(dsp_path, hit_dir, calibration_config="config/spe_calibration.yaml", window_config="config/dsp_window_configs.yaml", overwrite=False):
+def compute_psd_params(dsp_path, hit_dir, calibration_config="config/spe_calibration.yaml", window_config="config/dsp_window_configs.yaml", overwrite=False, prompt_width=None):
     """Compute charge_prompt, charge_total, psd_param (and n_pe, if calibrated)
     from a dsp-tier Parquet file's wf_charge_window column."""
     import pyarrow.parquet as pq
@@ -191,7 +215,8 @@ def compute_psd_params(dsp_path, hit_dir, calibration_config="config/spe_calibra
         if not matching:
             log.error(f"No window config matches wf_charge_window length {wf_charge_len} for {dsp_path.name}")
             return None
-        prompt_width = matching[0]["prompt_width"]
+        if prompt_width is None:
+            prompt_width = matching[0]["prompt_width"]
 
         charge_prompt = wcw[:, :prompt_width].sum(axis=1)
         charge_total = wcw.sum(axis=1)
@@ -200,13 +225,9 @@ def compute_psd_params(dsp_path, hit_dir, calibration_config="config/spe_calibra
         noise_floor = 3 * bl_sig * np.sqrt(n_window_samples)
         psd_param = np.where(charge_total > noise_floor, charge_prompt / charge_total, np.nan)
 
-
-        charge_prompt = wcw[:, :200].sum(axis=1)
-        charge_total = wcw.sum(axis=1)
-
-        n_window_samples = wcw.shape[1]
-        noise_floor = 3 * bl_sig * np.sqrt(n_window_samples)
-        psd_param = np.where(charge_total > noise_floor, charge_prompt / charge_total, np.nan)
+        # pileup tag and saturation flag (computed here, attached to `out` below)
+        max_jump_adc = max_rise(wcw)
+        lowest_adc = t.column("bl").to_numpy() - t.column("wf_amplitude").to_numpy()
 
         keep_cols = ["bl", "bl_sig", "wf_amplitude", "energy", "energy_short",
                      "run", "cycle_id", "rownumber", "medium"]
@@ -215,6 +236,8 @@ def compute_psd_params(dsp_path, hit_dir, calibration_config="config/spe_calibra
             out.append_column("charge_prompt", pa.array(charge_prompt))
                .append_column("charge_total", pa.array(charge_total))
                .append_column("psd_param", pa.array(psd_param))
+               .append_column("max_jump_adc", pa.array(max_jump_adc))
+               .append_column("lowest_adc", pa.array(lowest_adc))
         )
 
         run_base, _, _ = parse_run_info(Path(dsp_path).stem)
@@ -223,9 +246,20 @@ def compute_psd_params(dsp_path, hit_dir, calibration_config="config/spe_calibra
         if cal_path.exists():
             with open(cal_path) as f:
                 cal_db = yaml.safe_load(f) or {}
+                bad_keys = [k for k in cal_db if not isinstance(k, str)]
+                if bad_keys:
+                    log.warning(f"Non-string keys in {cal_path}: {bad_keys}. YAML read them as numbers; "
+                            f"quote them, e.g. '260520_1340':")
             if run_key in cal_db:
                 gain = cal_db[run_key]["gain"]
+                n_pe = charge_total / gain
                 out = out.append_column("n_pe", pa.array(charge_total / gain))
+                spe_peak = spe_pulse_height(wcw, n_pe)
+                if spe_peak is not None:
+                    out = out.append_column("max_jump_pe", pa.array(max_jump_adc / spe_peak))
+                    log.info(f"1 PE pulse height {spe_peak:.1f} ADC for {dsp_path.name}")
+                else:
+                    log.warning(f"too few 1 PE events in {dsp_path.name}; max_jump_pe omitted") 
                 log.info(f"Applied SPE gain={gain:.1f} for {run_key}")
             else:
                 log.warning(f"No SPE calibration found for {run_key} — n_pe omitted")

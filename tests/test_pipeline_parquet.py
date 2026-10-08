@@ -64,7 +64,7 @@ def test_convert_to_dsp_matches_lh5_baseline(test_daq_file, tmp_path, lh5_refere
 def test_compute_psd_params_matches_lh5_baseline(test_daq_file, tmp_path, lh5_reference_hit_path):
     raw_path = convert_to_raw(test_daq_file, tmp_path, overwrite=True)
     dsp_path = convert_to_dsp(raw_path, tmp_path, overwrite=True)
-    hit_path = compute_psd_params(dsp_path, tmp_path, overwrite=True)
+    hit_path = compute_psd_params(dsp_path, tmp_path, overwrite=True,prompt_width=200)
     assert hit_path is not None
 
     t = pq.read_table(str(hit_path))
