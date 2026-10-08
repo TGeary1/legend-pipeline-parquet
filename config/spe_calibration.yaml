@@ -1,11 +1,3 @@
-'260520_1340':
-  gain: 43076.6
-  gain_err: 133.3
-  method: self-calibration from low-charge population, charge_total field
-  n_peaks_used: 4
-  pedestal: 883.1
-  pedestal_err: 364.9
-  r_squared: 0.999981
 1450pm:
   gain: 28097.3
   gain_err: 24.3
@@ -22,3 +14,27 @@
   pedestal: 918.3
   pedestal_err: 30.4
   r_squared: 1.0
+'260520_1340':
+  gain: 43076.6
+  gain_err: 133.3
+  method: self-calibration from low-charge population, charge_total field
+  n_peaks_used: 4
+  pedestal: 883.1
+  pedestal_err: 364.9
+  r_squared: 0.999981
+'260520_1447':
+  gain: 43182.2
+  gain_err: 27.5
+  method: self-calibration from low-charge population, charge_total field
+  n_peaks_used: 4
+  pedestal: 954.3
+  pedestal_err: 75.3
+  r_squared: 0.999999
+'260520_1448':
+  gain: 43067.2
+  gain_err: 71.2
+  method: self-calibration from low-charge population, charge_total field
+  n_peaks_used: 4
+  pedestal: 1043.0
+  pedestal_err: 194.9
+  r_squared: 0.999995
