@@ -47,7 +47,7 @@ Usage (from the repo root):
 
 A run with no entry in config/spe_calibration.yaml still gets the baseline,
 timing and rate plots; the calibration-dependent plots are skipped with a
-message. Pass --peak PE:LO:HI (same format as spe_fit.py) to fit specific
+message. Pass --peak PE:LO:HI (same format as calibration/spe_fit.py) to fit specific
 windows instead of windows centred on the stored gain.
 """
 import argparse
@@ -514,7 +514,7 @@ def main(args):
     else:
         windows = None
         log.warning(f"no calibration for {run_base!r} in {args.calibration} and no --peak given: "
-                    f"skipping the charge-fit plot. Run spe_search.py / spe_fit.py first.")
+                    f"skipping the charge-fit plot. Run calibration/spe_search.py and calibration/spe_fit.py first.")
     if windows:
         gain_guess = cal["gain"] if cal else (windows[1][1] - windows[0][1])
         fit = fit_peaks(d["charge_total"], windows, bin_width=gain_guess / 50)
@@ -574,7 +574,7 @@ if __name__ == "__main__":
     ap.add_argument("--phases", default=str(REPO_ROOT / "config/run_phases.yaml"))
     ap.add_argument("--n-files", type=int, default=None, help="Use only the first N hit files (default: all)")
     ap.add_argument("--n-peaks", type=int, default=4, help="PE peaks to fit when windows come from the YAML gain")
-    ap.add_argument("--peak", action="append", help="Explicit window PE:LO:HI (repeatable), as in spe_fit.py")
+    ap.add_argument("--peak", action="append", help="Explicit window PE:LO:HI (repeatable), as in calibration/spe_fit.py")
     ap.add_argument("--spectrum-max", type=float, default=300, help="Upper n_pe edge of the energy spectrum")
     ap.add_argument("--wf-files", type=int, default=3, help="dsp files to sample waveforms from")
     ap.add_argument("--wf-events", type=int, default=20000, help="events to sample per dsp file")

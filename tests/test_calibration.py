@@ -1,12 +1,10 @@
 # tests/test_calibration.py
-import pytest
-from pathlib import Path
-import numpy as np
-from lh5.io import store as lh5store
 from pipeline.calibration import fit_spe_calibration
 
 
 def test_spe_calibration_matches_validated_result(lh5_reference_hit_path):
+    from lh5.io import store as lh5store
+
     tbl = lh5store.LH5Store().read("CompassEvent", str(lh5_reference_hit_path))
     charge_total = tbl["charge_total"].nda
 

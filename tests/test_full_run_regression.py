@@ -6,17 +6,18 @@ change that silently breaks something is caught without needing to rerun
 the full 42-file batch on NERSC to notice.
 
 This does NOT reprocess the run — it only reads existing hit-tier output.
-Skips gracefully if that output isn't present on the machine running the
-tests (e.g. local laptop, without the NERSC output directory mounted).
+Set SAR_FULL_RUN_HIT_DIR to that run's hit/ folder to enable it, e.g. on NERSC:
+    SAR_FULL_RUN_HIT_DIR=/global/cfs/cdirs/m2676/users/tgeary/legend-pipeline-parquet/data_nersc_full/hit pytest
+Without it the tests skip.
 """
+import os
+
 import pytest
 import numpy as np
 import pyarrow.parquet as pq
 from pathlib import Path
 
-FULL_RUN_HIT_DIR = Path(
-    "/global/cfs/cdirs/m2676/users/tgeary/legend-pipeline-parquet/data_nersc_full/hit"
-)
+FULL_RUN_HIT_DIR = Path(os.environ["SAR_FULL_RUN_HIT_DIR"]) if "SAR_FULL_RUN_HIT_DIR" in os.environ else None
 
 EXPECTED_FILE_COUNT = 42
 EXPECTED_TOTAL_ROWS = 7_271_088
@@ -27,9 +28,10 @@ NAN_COUNT_MAX_SANE = 100  # generous margin above the observed 14-38 range
 
 @pytest.fixture
 def full_run_hit_files():
+    if FULL_RUN_HIT_DIR is None:
+        pytest.skip("SAR_FULL_RUN_HIT_DIR not set — full-run regression check skipped")
     if not FULL_RUN_HIT_DIR.exists():
-        pytest.skip(f"full-run output not found at {FULL_RUN_HIT_DIR} — "
-                    f"this check only runs where that output is available (e.g. on NERSC)")
+        pytest.skip(f"full-run output not found at {FULL_RUN_HIT_DIR}")
     files = sorted(FULL_RUN_HIT_DIR.glob("*.parquet"))
     if not files:
         pytest.skip(f"no .parquet files found in {FULL_RUN_HIT_DIR}")

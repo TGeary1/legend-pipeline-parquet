@@ -1,3 +1,9 @@
+# SPE calibration per run, keyed by run_base from parse_run_info()
+# (e.g. '260520_1340' for DataR_CH1@DT5730_1463_run_260520_1340_liquid_*.BIN).
+# Written by calibration/spe_fit.py; read by the hit stage to add n_pe.
+# Keys must be quoted strings: unquoted 260520_1340 is read by YAML as the
+# number 2605201340 and the run's calibration is then never found.
+# n_pe = charge_total / gain (the pedestal is recorded but not subtracted).
 1450pm:
   gain: 28097.3
   gain_err: 24.3

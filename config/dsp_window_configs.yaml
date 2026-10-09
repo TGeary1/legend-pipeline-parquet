@@ -1,4 +1,12 @@
 # config/dsp_window_configs.yaml
+# DSP windows per waveform length (samples per record). The dsp stage picks the
+# entry matching the record length it measures from the data; a new record
+# length needs a new entry before that run can be processed.
+#   baseline_end  samples [0, baseline_end) give the baseline
+#   total_end     charge window = [baseline_end, total_end)
+#   prompt_width  samples from the charge-window start counted as prompt
+#                 light for psd_param (hit stage)
+#   prompt_end    = baseline_end + prompt_width (kept for reference)
 5000:
   baseline_end: 450
   prompt_end: 730

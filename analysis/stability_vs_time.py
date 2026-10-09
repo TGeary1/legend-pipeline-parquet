@@ -75,7 +75,7 @@ def main(args):
     with open(args.phases) as f:
         phase_db = {str(k).replace("_", ""): v for k, v in (yaml.safe_load(f) or {}).items()}
 
-    run_dirs = sorted(p for p in Path(args.data_root).glob("data_2605*") if (p / "hit").exists())
+    run_dirs = sorted(p for p in Path(args.data_root).glob(args.run_glob) if (p / "hit").exists())
     cols = ["n_pe", "psd_param", "lowest_adc", "max_jump_pe"]
     lo_npe, hi_npe = args.bright
 
@@ -85,7 +85,14 @@ def main(args):
         if not files:
             continue
         run_base = parse_run_info(files[0].stem)[0]
-        phase = phase_db.get(run_base.replace("_", ""), "?")
+        phase = phase_db.get(run_base.replace("_", ""))
+        if phase is None:
+            log.warning(f"{rd.name}: run {run_base} has no phase in {args.phases}; skipped")
+            continue
+        if run_base in {r["run"] for r in runs}:
+            log.warning(f"{rd.name}: run {run_base} already read from another folder; skipped "
+                        f"(use --run-glob to choose which copy)")
+            continue
         log.info(f"{rd.name} ({phase}): {len(files)} files")
         per_file = []          # (seq, 2D hist of bright events n_pe x psd)
         for f in files:
@@ -153,6 +160,8 @@ def main(args):
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--run-glob", default="data_*",
+                    help="Pattern for run folders under --data-root (default: data_*)")
     ap.add_argument("--data-root", default=str(REPO_ROOT))
     ap.add_argument("--phases", default=str(REPO_ROOT / "config/run_phases.yaml"))
     ap.add_argument("--output-dir", default="results/stability")

@@ -1,5 +1,6 @@
 # Python environment
 venv/
+.venv/
 __pycache__/
 *.pyc
 
@@ -12,15 +13,23 @@ data/hit/*
 !data/raw/.gitkeep
 !data/dsp/.gitkeep
 !data/hit/.gitkeep
+# per-run output folders (e.g. data_260520_1340_liquid/)
+data_*/
+*.partial
+
+# Analysis output, logs, scratch
+results/
+logs/
+scratch*/
+*.png
 
 # Parsl run logs
 runinfo/
 
 # Test artifacts
 .pytest_cache/
-*.png
 
 # Editor/OS cruft
 .vscode/
+.idea/
 .DS_Store
-EOF

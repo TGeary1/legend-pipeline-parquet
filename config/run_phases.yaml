@@ -1,7 +1,10 @@
 # config/run_phases.yaml
 # Phase of each run in the May 20-21 dataset, all taken in one consistent DAQ
 # setup (confirmed with analysis/compare_run_settings.py).
-# Keys are run_base values from parse_run_info().
+# Keys are run_base values from parse_run_info(), as QUOTED strings: unquoted
+# 260520_1340 is read by YAML as the number 2605201340.
+# Used by the analysis scripts (phase_comparison.py, stability_vs_time.py,
+# calibration_plots.py); runs not listed here are skipped by them.
 # Unlabeled runs confirmed solid by advisor. 260520_1801 excluded: no data files.
 # The earlier May 19 run 1450pm (SAr) used a different configuration and is not part of this set.
 '260520_1239': gas

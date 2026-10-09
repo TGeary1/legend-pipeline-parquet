@@ -60,14 +60,3 @@ def fit_spe_calibration(charge_total, peak_windows, bins=300, hist_range=None):
         "n_peaks_used": len(pe_numbers),
         "peak_fits": peak_fits,
     }
-
-
-from pathlib import Path
-#Legacy function. See build_raw_compass.py/parse_run_info
-def get_run_key(path):
-    """Strip tier suffixes to get a consistent run identifier across raw/dsp/hit filenames."""
-    stem = Path(path).stem
-    for suffix in ("_psd_hit", "_psd_dsp", "_hit", "_dsp", "_raw"):
-        if stem.endswith(suffix):
-            return stem[: -len(suffix)]
-    return stem
