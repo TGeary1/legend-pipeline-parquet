@@ -46,3 +46,11 @@
   pedestal: 839.0
   pedestal_err: 176.8
   r_squared: 0.999996
+'260521_1023':
+  gain: 43105.3
+  gain_err: 15.7
+  method: self-calibration from low-charge population, charge_total field
+  n_peaks_used: 4
+  pedestal: 996.4
+  pedestal_err: 43.0
+  r_squared: 1.0
