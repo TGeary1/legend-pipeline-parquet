@@ -26,7 +26,7 @@ the fit spanned only 300 samples (600 ns), too short to constrain a
     prompt window, but its lifetime cannot be fit from this data.
 
 Usage:
-    python spe_deconvolution_analysis.py \
+    python analysis/spe_deconvolution_analysis.py \
   --dsp-file .../SAr_dsp_file.parquet \
   --hit-file .../SAr_hit_file.parquet \
   --output-dir results/sar_deconvolution \

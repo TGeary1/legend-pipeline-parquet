@@ -287,7 +287,7 @@ def main(args):
         phase_db = {str(k).replace("_", ""): v for k, v in (yaml.safe_load(f) or {}).items()}
 
     run_dirs = [Path(p) for p in args.run_dirs] if args.run_dirs else \
-        sorted(p for p in Path(args.data_root).glob("data_2605*") if (p / "hit").exists())
+        sorted(p for p in Path(args.data_root).glob(args.run_glob) if (p / "hit").exists())
 
     per_run = {}
     for rd in run_dirs:
@@ -298,6 +298,10 @@ def main(args):
         phase = phase_db.get(run_base.replace("_", ""))
         if phase not in PHASES:
             log.warning(f"{rd.name}: run {run_base} has no phase in {args.phases}; skipped")
+            continue
+        if run_base in per_run:
+            log.warning(f"{rd.name}: run {run_base} already read from another folder; skipped "
+                        f"(use --run-dirs or --run-glob to choose which copy)")
             continue
         log.info(f"filling {rd.name} ({phase})")
         r = fill_run(rd, args.sat_floor, args.sat_margin, args.max_jump)
@@ -381,6 +385,8 @@ def main(args):
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--run-glob", default="data_*",
+                    help="Pattern for run folders under --data-root (default: data_*)")
     ap.add_argument("--data-root", default=str(REPO_ROOT),
                     help="Folder holding the data_2605* run directories (default: repo root)")
     ap.add_argument("--run-dirs", nargs="*", help="Explicit run directories instead of --data-root discovery")

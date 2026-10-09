@@ -28,8 +28,10 @@ dsp tier (.parquet)       — baseline-subtracted, polarity-corrected waveform
       │                      slice ("wf_charge_window") + scalar quantities
       │  numpy (compute_psd_params)
       ▼
-hit tier (.parquet)       — charge_prompt, charge_total, psd_param, n_pe
-                             (if calibrated) + carried-forward quantities
+hit tier (.parquet)       — charge_prompt, charge_total, psd_param,
+                             max_jump_adc (pileup tag), lowest_adc (saturation
+                             flag), n_pe + max_jump_pe (if calibrated)
+                             + carried-forward quantities (§8a)
 ```
 
 Every stage was **cross-validated numerically** against the already-trusted
@@ -151,18 +153,18 @@ filename):
 ```yaml
 5000:
   baseline_end: 450
-  prompt_end: 650
-  prompt_width: 200
+  prompt_end: 730
+  prompt_width: 280     # ~500 ns after pulse onset (was 200 before October 2026)
   total_end: 4500
-  notes: "liquid argon, validated against run 260520_1340_liquid_1"
 
 3000:
   baseline_end: 480
   prompt_end: 680
   prompt_width: 200
   total_end: 3000
-  notes: "solid argon, run 1450pm — decay not fully settled by end of record; total_end uses full record as a stopgap"
 ```
+
+(See the file itself for the notes on each entry.)
 
 `convert_to_dsp()` reads the actual waveform array's length from the raw
 Parquet file, looks up the matching entry, and **fails loudly (returns
@@ -213,11 +215,10 @@ run (§11):
    0.31% of the `charge_total` window's integrated sum. Both negligible —
    the single-file impression of an unsettled tail was mostly visual noise
    that washes out with real statistics.
-2. **Corrected time-axis check** (§7a below): at the confirmed 16 ns/sample
-   rate, `total_end: 3000` covers 3000 × 16 = 48 μs of real time —
-   comfortably longer than argon's triplet lifetime (~1.5 μs, liquid-argon
-   reference value). There was never a real risk of the record length
-   being too short for the triplet component specifically.
+2. **Time-axis check** (§7a below): at 2 ns/sample, `total_end: 3000`
+   covers 6 μs, about four triplet lifetimes (~1.5 μs, liquid-argon
+   reference value). Consistent with point 1: very little light is left
+   by the end of the record.
 
 **Conclusion: `total_end: 3000` for this run is not meaningfully biased by
 truncation.** This means the SAr run's `psd_param` distribution genuinely
@@ -259,28 +260,78 @@ No decimation or presumming key exists in `settings.xml`.
 - **Singlet resolution:** the ~6 ns singlet spans ~3 samples. Its light
   is captured in the prompt window, but its lifetime can't be fit from
   this data.
-- **Deconvolution (`spe_deconvolution_analysis.py`):** at 2 ns, the
+- **Deconvolution (`analysis/spe_deconvolution_analysis.py`):** at 2 ns, the
   liquid biexponential fit gives τ₁ ≈ 34 ns and τ₂ ≈ 294 ns. The fit
   covered only 300 samples (600 ns), too short to constrain a ~1.5 μs
   triplet. Not a lifetime result; the fit range needs reworking.
-- **Stored metadata:** every raw/dsp file written so far carries
-  `dt = 16`. Treat it as wrong. Planned fix: override `dt` to 2 in
-  `build_raw_compass.py` and reprocess raw.
+- **Stored metadata:** fixed. `build_raw_compass.py` now sets each
+  waveform's `dt` from the run's `settings.xml` (record length / samples,
+  falling back to 2 ns). Raw files written before that fix still carry
+  `dt = 16`; treat that value as wrong if you meet it.
 
 **Lesson:** a field present in decoded data is not necessarily a
 measurement. Check where a decoder populates a value before trusting it,
 and cross-check against the DAQ's own configuration.
 
-## 8. SPE calibration status
+## 8. SPE calibration
 
-Only the original liquid run (`260520_1340_liquid_1`) has a derived gain
-in `config/spe_calibration.yaml` (43,076.6 ± 133.3 ADC·samples/PE,
-R²=0.999981, from a 4-peak fit on the self-calibrating low-charge
-population — see `pipeline/calibration.py::fit_spe_calibration`). The SAr
-run and the plain-numeric-named run both still need their own gain fits.
-**Hold off on calibrating the SAr run until §7's truncation question is
-resolved** — a calibration derived from biased `charge_total` values would
-need to be redone anyway.
+Every run is self-calibrated from its own data: the dimmest events form a
+ladder of 1, 2, 3, 4 PE peaks in `charge_total`, and a straight-line fit of
+peak position against PE number gives the gain (slope) and pedestal
+(intercept). The hit stage then adds `n_pe = charge_total / gain`.
+
+Workflow for a new run (after its raw/dsp/hit tiers exist):
+
+```bash
+python calibration/spe_search.py --hit-dir <run>/hit --label <name>   # plots: find the peaks by eye
+python calibration/spe_fit.py --hit-dir <run>/hit \
+    --peak 1:33000:55000 --peak 2:76000:98000 \
+    --peak 3:119000:141000 --peak 4:162000:184000 --dry-run          # check gain and R^2
+python calibration/spe_fit.py ... (same, without --dry-run)            # writes config/spe_calibration.yaml
+python run_pipeline.py --stage hit --run-dirs <run>                    # rebuild hit with n_pe
+python analysis/calibration_plots.py --run-dir <run>                   # standard check plots
+```
+
+The windows above suit the May 20–21 setup; read your own from the
+`spe_search.py` plots. Calibrations are keyed by `run_base`
+(`parse_run_info`), and keys must stay quoted strings in the YAML.
+
+| Run | Phase | Gain (per PE) | R² |
+| --- | --- | --- | --- |
+| 1450pm (SAr, May 19) | solid | 28,097 ± 24 | 0.999999 |
+| 260520_1239 | gas | 41,513 ± 11 | 1.000000 |
+| 260520_1340 | liquid | 43,077 ± 133 | 0.999981 |
+| 260520_1447 | solid | 43,182 ± 28 | 0.999999 |
+| 260520_1448 | solid | 43,067 ± 71 | 0.999995 |
+| 260520_1800 | solid | 43,400 ± 65 | 0.999996 |
+| 260521_1023 | solid | 43,105 ± 16 | 1.000000 |
+
+The gain shifted once (3.7%) between the gas and liquid runs, then held
+within 0.8% for 21 hours. Moving the fit windows changes a gain by ~0.04%.
+
+## 8a. Hit-stage quality columns
+
+- **`max_jump_adc` / `max_jump_pe`** — pileup tag: the largest rise within
+  any 20 ns span starting 0.6 μs into the charge window. Late argon light
+  arrives one photon at a time (~1 PE steps), so a multi-PE jump is a
+  second event in the record. `max_jump_pe` divides by the file's own 1 PE
+  pulse height (~130 ADC), so it needs no extra calibration. The analysis
+  scripts cut at 3 PE; at 20–26 kHz trigger rates this removes 10–25% of
+  events, as the rate predicts.
+- **`lowest_adc`** — the waveform's lowest raw value (`bl − wf_amplitude`).
+  Large pulses clip near raw ADC ~7,060 (baseline ~14,400), not at 0;
+  events within 50 ADC of that are treated as saturated (< 0.1% of events
+  in May 20–21 data).
+- **`psd_param`** uses `prompt_width` from the window config: 280 samples
+  (~500 ns after onset) for 5000-sample records since October 2026. Hit
+  files built before then used 200 and are not comparable.
+
+**Data-quality finding (May 20–21 runs):** the argon was not stable for
+most of the data. `analysis/stability_vs_time.py` shows the liquid run
+dimming and then freezing in its last minutes, the solid's alpha
+brightness drifting and stepping between ~20 and ~54 PE at fixed PSD, and
+the gas run's slow light rising and falling. Run that script on any new
+dataset before quoting per-run numbers.
 
 ## 9. Git/NERSC reconciliation — lessons from a real incident
 
@@ -312,32 +363,30 @@ isn't repeated:
 
 ```
 legend-pipeline-parquet/
-├── build_raw_compass.py           # parse_run_info(), build_raw_app() — raw stage
-├── config/
-│   ├── dsp_window_configs.yaml    # per-wf_len dsp window boundaries (§6)
-│   └── spe_calibration.yaml       # per-run gain/pedestal (§8)
+├── README.md
+├── run_pipeline.py              # local driver: full pipeline, or --stage hit rebuild
+├── run_parsl_pipeline.py        # NERSC driver: Parsl + Slurm, one executor per stage
+├── build_raw_compass.py         # parse_run_info(), build_raw_app() — raw stage
 ├── pipeline/
-│   ├── __init__.py
-│   ├── process.py                 # convert_to_raw, convert_to_dsp,
-│   │                               # compute_psd_params, process_file,
-│   │                               # select_channel_files, sequence_key
-│   ├── calibration.py             # fit_spe_calibration, get_run_key
-│   ├── dsp_config.py              # build_dsp_config() — programmatic dspeed chain
-│   └── parsl_apps.py              # raw_stage_app, dsp_stage_app, hit_stage_app
-├── tests/
-│   ├── conftest.py                 # test_daq_file, lh5_reference_hit_path fixtures
-│   │                                # (both skip gracefully if data isn't present —
-│   │                                #  this repo's tests are expected to partially
-│   │                                #  skip on machines without the large test files)
-│   ├── test_pipeline_parquet.py    # end-to-end + cross-validation against LH5
-│   ├── test_calibration.py         # SPE gain fit regression
-│   ├── test_parsl_pipeline.py      # Parsl-vs-direct equivalence (local executors)
-│   ├── test_run_parsing.py         # parse_run_info() unit tests, all 4 known conventions
-│   └── test_dsp_window_config.py   # build_dsp_config() unit tests
-├── utils.py                        # make_local_config() (testing), make_config()
-│                                    # (Perlmutter/Slurm, account="m2676")
-├── run_pipeline.py                 # CLI batch entry point: --daq-dir, --output-dir, --limit
-└── run_parsl_pipeline.py           # Parsl-parallelized batch entry point
+│   ├── process.py               # convert_to_raw, convert_to_dsp, compute_psd_params,
+│   │                            # process_file, select_channel_files, sequence_key
+│   ├── calibration.py           # fit_spe_calibration()
+│   ├── dsp_config.py            # build_dsp_config() — programmatic dspeed chain
+│   ├── parsl_apps.py            # raw_stage_app, dsp_stage_app, hit_stage_app
+│   ├── parsl_config.py          # make_local_config(), make_config() (Perlmutter)
+│   └── paths.py                 # repo-relative config locations
+├── calibration/
+│   ├── spe_search.py            # charge histograms to find the PE peaks
+│   └── spe_fit.py               # fit the peaks, write config/spe_calibration.yaml
+├── analysis/                    # scripts that read hit (and dsp) files; see README
+├── config/
+│   ├── dsp_window_configs.yaml  # per-record-length windows (§6)
+│   ├── spe_calibration.yaml     # per-run gain (§8)
+│   └── run_phases.yaml          # gas / liquid / solid per run, for analysis
+├── tests/                       # data-dependent tests skip when files are absent
+├── requirements.txt             # direct dependencies, pinned
+├── requirements-lock.txt        # full environment snapshot
+└── environment.yml              # conda environment
 ```
 
 ## 11. Running things
@@ -352,9 +401,11 @@ python -m pytest -v
 # sequential (no Parsl), with a limit for cautious first runs against new data
 python run_pipeline.py --daq-dir /path/to/some/DAQ/run_folder --output-dir data --limit 2
 
-# Parsl with local ThreadPoolExecutors — exercises the same three-stage
-# executor wiring as the real NERSC path, without touching Slurm at all
-python test_parsl_local.py   # or equivalent ad hoc script using make_local_config()
+# several processes in parallel
+python run_pipeline.py --daq-dir /path/to/run_folder --output-dir data --workers 4
+
+# Parsl with local thread executors (same wiring as NERSC, no Slurm):
+# tests/test_parsl_pipeline.py, which uses pipeline.parsl_config.make_local_config()
 ```
 
 ### NERSC / Perlmutter — real production runs
@@ -375,9 +426,20 @@ your behalf via Parsl's `SlurmProvider`; you do not need to be inside an
 python run_parsl_pipeline.py \
   --daq-dir /global/cfs/cdirs/m2676/data/teststands/sarge/sarge9/DAQ/<run_folder> \
   --output-dir /global/cfs/cdirs/m2676/users/<you>/legend-pipeline-parquet/<output_dir> \
-  --account m2676 \
   --qos regular \
-  [--limit N]
+  [--limit N] [--account m2676] [--conda-env legend-pipeline-parquet]
+```
+
+Run it inside `tmux` and save the log (`2>&1 | tee logs/<run>.log`): the
+driver must stay alive for the whole run. Each stage submits its own Slurm
+job, so expect queue waits between stages.
+
+**Rebuilding only the hit tier** (after a calibration or a hit-stage code
+change) does not need Parsl; use an interactive node:
+
+```bash
+salloc -N 1 -C cpu -q interactive -t 01:00:00 -A m2676
+python run_pipeline.py --stage hit --workers 32 --keep-previous hit_old --run-dirs <run dirs>
 ```
 
 **Always stage new data before a full run** — this is not optional caution,
@@ -418,11 +480,10 @@ sacctmgr show qos <qos_name> format=Name,MaxWall -p
   `qos="regular"` — Slurm internally routes the job into one of these two
   sub-tiers itself; they are not something you choose directly. `MaxWall`
   = 2 days on this account, far more headroom than needed so far.
-- A `walltime` of `00:30:00` in `make_config()` has been sufficient for a
-  full 42-file run of `run_1450pm_SAr` (~7.27M events, raw+dsp+hit, all
-  three Parsl executors) under `regular` QOS. Scale up cautiously for
-  substantially larger runs, and check actual elapsed time via `sacct`
-  after the fact rather than guessing further in advance.
+- `make_config()` requests 2 hours per job under `regular` by default
+  (`--walltime` to change). Worker counts per node are capped by memory
+  (`DEFAULT_WORKERS_PER_NODE`: raw 64, dsp 32, hit 32): a dsp task peaks at
+  ~10 GB, and an uncapped node (128 workers) runs out of memory.
 
 ### Verifying output — do this every time, not just on the first run of a new dataset
 
@@ -449,39 +510,22 @@ new run's output against this shape before trusting it.
 
 ## 12. What's still open
 
+- **Cut-off final files.** When acquisition stops mid-write, the last file
+  of a run ends in a partial event and the raw stage rejects the whole
+  file (1447, 1448 and 1800 each lost their last file, ≤ 0.5% of the run).
+  Recovering the complete events from such files is a planned fix.
+- **Run 260520_1448's run info** says it started at 17:56 and lasted
+  4 minutes, which cannot hold its 131 files; treat its timing as unknown.
 - **`WANTED_CHANNELS = [1]`** — confirmed as the only channel present
   across all examined runs; still worth confirming with the group that
-  channel 1 is definitively the argon-scintillation PMT, not an
-  incidental single active channel.
-- **The singlet-resolution DAQ limitation (§7a)** — a real, open question
-  for the group: does resolving argon's ~6 ns singlet component matter for
-  this project's goals? If so, future acquisitions need onboard presumming
-  disabled or reduced; no offline fix is possible for already-recorded
-  data. Communicate the §7a correction (rise-time/filter figures were off
-  by 8x) to whoever received the original, uncorrected numbers.
-- **`medium == "unknown"`** for the plain-numeric-named run
-  (`run_260521_1023`) — checked `run.info` and `settings.xml` for this run
-  specifically (see below); neither records a medium
-  (`SW_PARAMETER_CH_LABEL` is the generic default `"CH"`, not a custom
-  operator label). This looks like a dead end on the file-metadata side —
-  genuinely needs a direct answer from whoever ran this session, not
-  further file archaeology.
-- **SPE calibration** for the SAr and plain-numeric runs — not yet done.
-  SAr is no longer blocked (§7 resolved) and can proceed; the
-  plain-numeric run still needs its raw/dsp/hit processing run at all
-  (only a `--limit 2` test was planned, not yet executed as of this
-  writing).
-- **The `.root` (Hcompass.../HcompassF.../HcompassR...) files and
-  `run.cae`** found alongside runs' `RAW/`/`FILTERED`/`OFFLINE`
-  directories — not investigated in detail. `run.info` and `settings.xml`
-  (see below) turned out to be far more useful for acquisition metadata;
-  the `.root` files are likely CoMPASS's own histogram/spectrum exports
-  and probably don't carry anything this pipeline needs, but this is an
-  assumption, not a confirmed fact.
-- **The remaining runs under `DAQ/`** (the four other `run_1113am*`
-  directories, plus anything else in the tree) have not yet been
-  processed through this pipeline — `run_1450pm_SAr` is the only run
-  fully validated and run at production scale so far.
+  channel 1 is definitively the argon-scintillation PMT.
+- **Phase labels** come from `config/run_phases.yaml` (unlabelled May 20–21
+  runs confirmed solid by the advisor), not from file names.
+- **The `.root` (Hcompass…) files and `run.cae`** found alongside runs'
+  `RAW/` directories — not investigated; probably CoMPASS's own histogram
+  exports.
+- **Prompt-window definition** — see the note at the end of this document
+  about CoMPASS's own gate settings.
 
 ### Resolved today, kept here for the record
 

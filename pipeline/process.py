@@ -1,21 +1,35 @@
-import os
+"""The three processing stages for one file: DAQ .BIN -> raw -> dsp -> hit.
+
+Every stage writes Parquet, skips files whose output already exists (unless
+overwrite=True), writes atomically (see atomic_write_table), and returns the
+output path, or None on failure, so one bad file never stops a batch.
+"""
 import logging
-import warnings
+import os
 import re
+import warnings
+from pathlib import Path
+
 import lgdo
 import numpy as np
-import pyarrow.parquet as pq
 import pyarrow as pa
+import pyarrow.compute as pc
+import pyarrow.parquet as pq
 import yaml
-from pipeline.dsp_config import build_dsp_config
-from build_raw_compass import parse_run_info
-from lh5.io import store as lh5store
-from pathlib import Path
-from daq2lh5 import build_raw
 from dspeed import build_dsp
 
+from build_raw_compass import parse_run_info
+from pipeline.dsp_config import build_dsp_config
+from pipeline.paths import DEFAULT_CALIBRATION, DEFAULT_WINDOW_CONFIG
 
 log = logging.getLogger(__name__)
+
+PROVENANCE_COLS = ["run", "cycle_id", "rownumber", "medium"]
+
+# Pileup tag (see max_rise)
+JUMP_LAG = 10      # 10 samples = 20 ns, about one photon's rise time
+JUMP_START = 300   # 0.6 us into the charge window: past the main pulse peak
+
 
 def atomic_write_table(table, path, **kwargs):
     """Write to '<name>.partial', then rename. A crash mid-write leaves only the
@@ -28,9 +42,6 @@ def atomic_write_table(table, path, **kwargs):
     finally:
         if tmp.exists():
             tmp.unlink()
-
-JUMP_LAG = 10      # 10 samples = 20 ns, about one photon's rise time
-JUMP_START = 300   # 0.6 us into the charge window: past the main pulse peak
 
 
 def max_rise(wcw, lag=JUMP_LAG, start=JUMP_START, chunk=5000):
@@ -53,9 +64,18 @@ def spe_pulse_height(wcw, n_pe, lo=0.85, hi=1.15, min_events=1000):
         return None
     return float(wcw[sel].mean(axis=0).max())
 
-#Runs the raw conversion app with overwrite/skip options and error isolation. 
+
+def _load_window_configs(window_config):
+    with open(window_config) as f:
+        return yaml.safe_load(f)
+
+
+# ---------------------------------------------------------------------------
+# Stage 1: DAQ .BIN -> raw
+# ---------------------------------------------------------------------------
+
 def convert_to_raw(daq_path, base_dir, overwrite=False):
-    """base_dir should be the parent of a 'raw/' subdirectory that build_raw_app writes into."""
+    """Decode one CoMPASS .BIN file into <base_dir>/raw/<stem>.parquet."""
     from build_raw_compass import build_raw_app
 
     daq_path = Path(daq_path)
@@ -80,16 +100,16 @@ def convert_to_raw(daq_path, base_dir, overwrite=False):
     return Path(result)
 
 
-#Measures waveform length from data and builds dsp
-def convert_to_dsp(raw_path, dsp_dir, window_config="config/dsp_window_configs.yaml", overwrite=False):
-    import pyarrow.parquet as pq
-    import pyarrow.compute as pc
-    import lgdo
-    from dspeed import build_dsp
+# ---------------------------------------------------------------------------
+# Stage 2: raw -> dsp
+# ---------------------------------------------------------------------------
 
+def convert_to_dsp(raw_path, dsp_dir, window_config=DEFAULT_WINDOW_CONFIG, overwrite=False):
+    """Baseline, polarity-corrected charge window and scalars, via dspeed.
+    The window boundaries come from window_config, keyed by the waveform
+    length measured from the data itself."""
     raw_path = Path(raw_path)
     dsp_path = Path(dsp_dir) / raw_path.name
-
     Path(dsp_dir).mkdir(parents=True, exist_ok=True)
 
     if dsp_path.exists() and not overwrite:
@@ -99,31 +119,27 @@ def convert_to_dsp(raw_path, dsp_dir, window_config="config/dsp_window_configs.y
     try:
         full_table = pq.read_table(str(raw_path))
 
-        # Determine wf_len directly from the data, not from filenames or the
-        # (known-unreliable) CompassHeader — the source of truth is the
-        # actual waveform array length.
+        # The source of truth for the waveform length is the waveform array
+        # itself, not the filename or the (known-unreliable) CompassHeader.
         wf_values = pc.struct_field(full_table.column("waveform"), "values")
         wf_len = len(wf_values.to_numpy(zero_copy_only=False)[0])
 
-        with open(window_config) as f:
-            configs = yaml.safe_load(f)
+        configs = _load_window_configs(window_config)
         if wf_len not in configs:
             log.error(f"No dsp window config for wf_len={wf_len} in {window_config} — "
-                       f"add an entry before processing this run. File: {raw_path.name}")
+                      f"add an entry before processing this run. File: {raw_path.name}")
             return None
 
         cfg = configs[wf_len]
         log.info(f"Using dsp windows for wf_len={wf_len}: {cfg.get('notes', '')}")
 
-        provenance_cols = ["run", "cycle_id", "rownumber", "medium"]
-        physics_cols = [c for c in full_table.column_names if c not in provenance_cols]
-
+        physics_cols = [c for c in full_table.column_names if c not in PROVENANCE_COLS]
         t_in = lgdo.Table(full_table.select(physics_cols))
         dsp_config = build_dsp_config(cfg["baseline_end"], cfg["prompt_end"], cfg["total_end"])
         result = build_dsp(t_in, dsp_config=dsp_config)
 
         out_arrow = (result if result is not None else t_in).view_as("arrow")
-        for col in provenance_cols:
+        for col in PROVENANCE_COLS:
             out_arrow = out_arrow.append_column(col, full_table.column(col))
 
         atomic_write_table(out_arrow, dsp_path, compression="lz4")
@@ -135,62 +151,25 @@ def convert_to_dsp(raw_path, dsp_dir, window_config="config/dsp_window_configs.y
     return dsp_path
 
 
-#Chains the three conversion stages for a single file
-def process_file(daq_path, base_dir, dsp_config="config/compass-dsp-config.json",
-                  calibration_config="config/spe_calibration.yaml", overwrite=False):
-    daq_path = Path(daq_path)
-    base_dir = Path(base_dir)
+# ---------------------------------------------------------------------------
+# Stage 3: dsp -> hit
+# ---------------------------------------------------------------------------
 
-    for subdir in ("raw", "dsp", "hit"):
-        (base_dir / subdir).mkdir(parents=True, exist_ok=True)
+def compute_psd_params(dsp_path, hit_dir, calibration_config=DEFAULT_CALIBRATION,
+                       window_config=DEFAULT_WINDOW_CONFIG, overwrite=False, prompt_width=None):
+    """Per-event physics quantities from a dsp file's wf_charge_window:
 
-    raw_path = convert_to_raw(daq_path, base_dir, overwrite=overwrite)
-    if raw_path is None:
-        return None
+    always:          charge_prompt, charge_total, psd_param (prompt / total),
+                     max_jump_adc (pileup tag), lowest_adc (saturation flag),
+                     plus bl, bl_sig, wf_amplitude and the provenance columns
+    if calibrated:   n_pe (charge_total / gain) and max_jump_pe (pileup tag
+                     in units of this file's 1 PE pulse height)
 
-    dsp_path = convert_to_dsp(raw_path, base_dir / "dsp", overwrite=overwrite)
-    if dsp_path is None:
-        return None
-
-    hit_path = compute_psd_params(dsp_path, base_dir / "hit", calibration_config, overwrite=overwrite)
-    if hit_path is None:
-        return None
-
-    return hit_path
-
-
-#Keeps only files for desired channels
-def select_channel_files(daq_files, wanted_channels):
-    """Filter a list of DAQ file paths, keeping only the given CoMPASS channel numbers."""
-    pattern = re.compile(r"CH(\d+)@.*?(?:_(\d+))?\.BIN$", re.IGNORECASE)
-    selected = []
-    for f in daq_files:
-        m = pattern.search(Path(f).name)
-        if m is None:
-            log.warning(f"Could not parse channel from filename, skipping: {f}")
-            continue
-        ch = int(m.group(1))
-        if ch in wanted_channels:
-            selected.append(f)
-    return selected
-
-
-def sequence_key(path):
-    """Sort key so the unnumbered file sorts before _1, _2, _3, etc."""
-    m = re.search(r"_(\d+)\.BIN$", Path(path).name, re.IGNORECASE)
-    return int(m.group(1)) if m else 0
-
-
-def compute_psd_params(dsp_path, hit_dir, calibration_config="config/spe_calibration.yaml", window_config="config/dsp_window_configs.yaml", overwrite=False, prompt_width=None):
-    """Compute charge_prompt, charge_total, psd_param (and n_pe, if calibrated)
-    from a dsp-tier Parquet file's wf_charge_window column."""
-    import pyarrow.parquet as pq
-    import pyarrow.compute as pc
-    import yaml
-
+    prompt_width (samples from the charge-window start) defaults to the
+    value in window_config; pass it explicitly only to reproduce an older
+    definition (the LH5 comparison test uses 200)."""
     dsp_path = Path(dsp_path)
     hit_path = Path(hit_dir) / dsp_path.name
-
     Path(hit_dir).mkdir(parents=True, exist_ok=True)
 
     if hit_path.exists() and not overwrite:
@@ -204,13 +183,11 @@ def compute_psd_params(dsp_path, hit_dir, calibration_config="config/spe_calibra
         wcw = np.stack(wcw_col.to_numpy(zero_copy_only=False))
         bl_sig = t.column("bl_sig").to_numpy()
 
-        # Determine prompt_width the same way convert_to_dsp determined its
-        # windows: keyed by the actual charge-window length, not assumed.
+        # Find this file's window config the way convert_to_dsp chose it:
+        # the charge-window length (total_end - baseline_end) is the one
+        # quantity recoverable from the dsp file alone.
         wf_charge_len = wcw.shape[1]
-        with open(window_config) as f:
-            configs = yaml.safe_load(f)
-        # Match by (total_end - baseline_end) == wf_charge_len, since that's
-        # the quantity actually recoverable from this file alone.
+        configs = _load_window_configs(window_config)
         matching = [c for c in configs.values() if c["total_end"] - c["baseline_end"] == wf_charge_len]
         if not matching:
             log.error(f"No window config matches wf_charge_window length {wf_charge_len} for {dsp_path.name}")
@@ -221,16 +198,17 @@ def compute_psd_params(dsp_path, hit_dir, calibration_config="config/spe_calibra
         charge_prompt = wcw[:, :prompt_width].sum(axis=1)
         charge_total = wcw.sum(axis=1)
 
-        n_window_samples = wcw.shape[1]
-        noise_floor = 3 * bl_sig * np.sqrt(n_window_samples)
+        # Events whose total charge is within noise of zero get NaN PSD
+        # rather than a meaningless ratio of two noise sums.
+        noise_floor = 3 * bl_sig * np.sqrt(wf_charge_len)
         psd_param = np.where(charge_total > noise_floor, charge_prompt / charge_total, np.nan)
 
-        # pileup tag and saturation flag (computed here, attached to `out` below)
         max_jump_adc = max_rise(wcw)
         lowest_adc = t.column("bl").to_numpy() - t.column("wf_amplitude").to_numpy()
 
-        keep_cols = ["bl", "bl_sig", "wf_amplitude", "energy", "energy_short",
-                     "run", "cycle_id", "rownumber", "medium"]
+        # energy/energy_short are CoMPASS's on-board values; carried only if an
+        # older dsp file still has them (the current dsp config drops them)
+        keep_cols = ["bl", "bl_sig", "wf_amplitude", "energy", "energy_short"] + PROVENANCE_COLS
         out = t.select([c for c in keep_cols if c in t.column_names])
         out = (
             out.append_column("charge_prompt", pa.array(charge_prompt))
@@ -240,31 +218,8 @@ def compute_psd_params(dsp_path, hit_dir, calibration_config="config/spe_calibra
                .append_column("lowest_adc", pa.array(lowest_adc))
         )
 
-        run_base, _, _ = parse_run_info(Path(dsp_path).stem)
-        run_key = run_base
-        cal_path = Path(calibration_config)
-        if cal_path.exists():
-            with open(cal_path) as f:
-                cal_db = yaml.safe_load(f) or {}
-                bad_keys = [k for k in cal_db if not isinstance(k, str)]
-                if bad_keys:
-                    log.warning(f"Non-string keys in {cal_path}: {bad_keys}. YAML read them as numbers; "
-                            f"quote them, e.g. '260520_1340':")
-            if run_key in cal_db:
-                gain = cal_db[run_key]["gain"]
-                n_pe = charge_total / gain
-                out = out.append_column("n_pe", pa.array(charge_total / gain))
-                spe_peak = spe_pulse_height(wcw, n_pe)
-                if spe_peak is not None:
-                    out = out.append_column("max_jump_pe", pa.array(max_jump_adc / spe_peak))
-                    log.info(f"1 PE pulse height {spe_peak:.1f} ADC for {dsp_path.name}")
-                else:
-                    log.warning(f"too few 1 PE events in {dsp_path.name}; max_jump_pe omitted") 
-                log.info(f"Applied SPE gain={gain:.1f} for {run_key}")
-            else:
-                log.warning(f"No SPE calibration found for {run_key} — n_pe omitted")
-        else:
-            log.warning(f"Calibration config {cal_path} not found — n_pe omitted")
+        out = _add_calibrated_columns(out, dsp_path, Path(calibration_config),
+                                      charge_total, wcw, max_jump_adc)
 
         atomic_write_table(out, hit_path, compression="lz4")
     except Exception:
@@ -273,3 +228,84 @@ def compute_psd_params(dsp_path, hit_dir, calibration_config="config/spe_calibra
 
     log.info(f"hit OK: {dsp_path.name} -> {hit_path.name}")
     return hit_path
+
+
+def _add_calibrated_columns(out, dsp_path, cal_path, charge_total, wcw, max_jump_adc):
+    """Append n_pe and max_jump_pe if this run has an SPE calibration.
+    Calibrations are keyed by run_base (from parse_run_info), so every file
+    of a run shares one entry. A missing calibration is not an error: the
+    columns are left out with a warning, and the hit tier can be rebuilt
+    once the run is calibrated."""
+    if not cal_path.exists():
+        log.warning(f"Calibration config {cal_path} not found — n_pe omitted")
+        return out
+
+    with open(cal_path) as f:
+        cal_db = yaml.safe_load(f) or {}
+    bad_keys = [k for k in cal_db if not isinstance(k, str)]
+    if bad_keys:
+        log.warning(f"Non-string keys in {cal_path}: {bad_keys}. YAML read them as numbers; "
+                    f"quote them, e.g. '260520_1340':")
+
+    run_key = parse_run_info(dsp_path.stem)[0]
+    if run_key not in cal_db:
+        log.warning(f"No SPE calibration found for {run_key} — n_pe omitted")
+        return out
+
+    gain = cal_db[run_key]["gain"]
+    n_pe = charge_total / gain
+    out = out.append_column("n_pe", pa.array(n_pe))
+    spe_peak = spe_pulse_height(wcw, n_pe)
+    if spe_peak is not None:
+        out = out.append_column("max_jump_pe", pa.array(max_jump_adc / spe_peak))
+        log.info(f"1 PE pulse height {spe_peak:.1f} ADC for {dsp_path.name}")
+    else:
+        log.warning(f"too few 1 PE events in {dsp_path.name}; max_jump_pe omitted")
+    log.info(f"Applied SPE gain={gain:.1f} for {run_key}")
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Helpers for batch drivers
+# ---------------------------------------------------------------------------
+
+def process_file(daq_path, base_dir, calibration_config=DEFAULT_CALIBRATION,
+                 window_config=DEFAULT_WINDOW_CONFIG, overwrite=False):
+    """All three stages for one file, sequentially. Returns the hit path or None."""
+    base_dir = Path(base_dir)
+    for subdir in ("raw", "dsp", "hit"):
+        (base_dir / subdir).mkdir(parents=True, exist_ok=True)
+
+    raw_path = convert_to_raw(daq_path, base_dir, overwrite=overwrite)
+    if raw_path is None:
+        return None
+    dsp_path = convert_to_dsp(raw_path, base_dir / "dsp", window_config, overwrite=overwrite)
+    if dsp_path is None:
+        return None
+    return compute_psd_params(dsp_path, base_dir / "hit", calibration_config, window_config,
+                              overwrite=overwrite)
+
+
+def select_channel_files(daq_files, wanted_channels):
+    """Filter a list of DAQ file paths, keeping only the given CoMPASS channel numbers."""
+    pattern = re.compile(r"CH(\d+)@.*?(?:_(\d+))?\.BIN$", re.IGNORECASE)
+    selected = []
+    for f in daq_files:
+        m = pattern.search(Path(f).name)
+        if m is None:
+            log.warning(f"Could not parse channel from filename, skipping: {f}")
+            continue
+        if int(m.group(1)) in wanted_channels:
+            selected.append(f)
+    return selected
+
+
+def sequence_key(path):
+    """Sort key putting a run's files in acquisition order: the unnumbered
+    first file, then _1, _2, ... (plain sorted() would put _10 before _2).
+    Uses parse_run_info so a date-time run name such as run_260520_1447 is
+    not mistaken for file number 1447."""
+    try:
+        return parse_run_info(Path(path).stem)[1]
+    except ValueError:
+        return 0

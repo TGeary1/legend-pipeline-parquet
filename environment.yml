@@ -1,0 +1,13 @@
+# conda environment for this repo:
+#   conda env create -f environment.yml
+#   conda activate legend-pipeline-parquet
+# On NERSC: `module load conda` first. The name below is what the Parsl
+# workers activate by default (run_parsl_pipeline.py --conda-env to change it).
+name: legend-pipeline-parquet
+channels:
+  - conda-forge
+dependencies:
+  - python=3.10
+  - pip
+  - pip:
+      - -r requirements.txt

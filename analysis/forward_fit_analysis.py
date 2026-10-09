@@ -41,7 +41,7 @@ Liquid run reference result (5 PE pileup cut, 1% systematic):
   slow tau ~ 1458 ns (range 1303-1656 across checks), slow fraction 0.047.
 
 Usage:
-    python forward_fit_analysis.py \\
+    python analysis/forward_fit_analysis.py \\
         --dsp-dir data/dsp --hit-dir data/hit \\
         --file-glob "*liquid_1.parquet" \\
         --label liquid_260520_1340 --output-dir results/forward_fit

@@ -12,7 +12,7 @@ specific run's light yield. Always look at the plots before guessing
 fit windows.
  
 Usage:
-    python spe_search.py \\
+    python calibration/spe_search.py \\
         --hit-dir /path/to/data/hit \\
         --output-dir results/spe_search \\
         --label my_new_run \\

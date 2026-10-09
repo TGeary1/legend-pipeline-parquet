@@ -4,11 +4,10 @@ import numpy as np
 import pyarrow.parquet as pq
 import pyarrow.compute as pc
 import yaml
-from lh5.io import store as lh5store
 
+from pipeline.paths import DEFAULT_WINDOW_CONFIG
 from pipeline.process import convert_to_raw, convert_to_dsp, compute_psd_params
-from pipeline.process import process_file, select_channel_files
-from pipeline.calibration import get_run_key
+from pipeline.process import process_file, select_channel_files, sequence_key
 
 
 def _extract_struct_values(table, column_name):
@@ -55,6 +54,7 @@ def test_convert_to_dsp_matches_lh5_baseline(test_daq_file, tmp_path, lh5_refere
     # Cross-validate against the independently-built LH5 dsp pipeline.
     # Note: lh5_reference_hit_path points at the hit tier, but bl/bl_sig are
     # carried through unchanged from dsp, so this is a valid check either way.
+    from lh5.io import store as lh5store
     lh5_hit = lh5store.LH5Store().read("CompassEvent", str(lh5_reference_hit_path))
     assert np.allclose(t.column("bl").to_numpy(), lh5_hit["bl"].nda)
     assert np.allclose(t.column("bl_sig").to_numpy(), lh5_hit["bl_sig"].nda)
@@ -64,13 +64,14 @@ def test_convert_to_dsp_matches_lh5_baseline(test_daq_file, tmp_path, lh5_refere
 def test_compute_psd_params_matches_lh5_baseline(test_daq_file, tmp_path, lh5_reference_hit_path):
     raw_path = convert_to_raw(test_daq_file, tmp_path, overwrite=True)
     dsp_path = convert_to_dsp(raw_path, tmp_path, overwrite=True)
-    hit_path = compute_psd_params(dsp_path, tmp_path, overwrite=True,prompt_width=200)
+    hit_path = compute_psd_params(dsp_path, tmp_path, overwrite=True, prompt_width=200)
     assert hit_path is not None
 
     t = pq.read_table(str(hit_path))
     assert t.num_rows == 104_596
 
     psd_parquet = t.column("psd_param").to_numpy()
+    from lh5.io import store as lh5store
     lh5_hit = lh5store.LH5Store().read("CompassEvent", str(lh5_reference_hit_path))
     psd_lh5 = lh5_hit["psd_param"].nda
 
@@ -92,13 +93,13 @@ def test_skip_if_exists_behavior(test_daq_file, tmp_path):
     assert mtime_1 == mtime_2
 
 
-def test_get_run_key_matches_across_tiers():
-    # Parquet filenames don't carry tier suffixes, unlike the LH5 pipeline's
-    # _raw/_dsp/_hit convention — confirm the key still resolves consistently.
-    raw_key = get_run_key("data/raw/DataR_CH1@DT5730_1463_run_260520_1340_liquid_1.parquet")
-    dsp_key = get_run_key("data/dsp/DataR_CH1@DT5730_1463_run_260520_1340_liquid_1.parquet")
-    hit_key = get_run_key("data/hit/DataR_CH1@DT5730_1463_run_260520_1340_liquid_1.parquet")
-    assert raw_key == dsp_key == hit_key == "DataR_CH1@DT5730_1463_run_260520_1340_liquid_1"
+def test_sequence_key_orders_files_by_acquisition():
+    # the unnumbered first file of a date-time run must sort first, not as file 1447
+    names = ["DataR_CH1@DT5730_1463_run_260520_1447_10.BIN",
+             "DataR_CH1@DT5730_1463_run_260520_1447_2.BIN",
+             "DataR_CH1@DT5730_1463_run_260520_1447.BIN"]
+    assert [sequence_key(n) for n in sorted(names, key=sequence_key)] == [0, 2, 10]
+
 
 @pytest.mark.slow
 def test_process_file_end_to_end(test_daq_file, tmp_path):
@@ -129,7 +130,7 @@ def test_select_channel_files_handles_unparseable_names():
 
 
 def test_dsp_window_config_yaml_has_expected_keys():
-    with open("config/dsp_window_configs.yaml") as f:
+    with open(DEFAULT_WINDOW_CONFIG) as f:
         configs = yaml.safe_load(f)
     assert 5000 in configs
     assert 3000 in configs
