@@ -9,10 +9,10 @@
 #   prompt_end    = baseline_end + prompt_width (kept for reference)
 5000:
   baseline_end: 450
-  prompt_end: 730
-  prompt_width: 280
+  prompt_end: 980
+  prompt_width: 530
   total_end: 4500
-  notes: "May 20-21 setup (gas, liquid, solid). Prompt window = 280 samples from the charge-window start: pulse onset is ~30 samples in, so this is ~500 ns (250 samples at 2 ns) after onset, per advisor."
+  notes: "May 20-21 setup (gas, liquid, solid). Prompt window = 530 samples from the charge-window start: pulse onset is ~30 samples in, so this is ~1 us (500 samples at 2 ns) after onset, per advisor."
 
 3000:
   baseline_end: 480

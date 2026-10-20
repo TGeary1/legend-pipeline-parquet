@@ -162,7 +162,7 @@ def make_model(R, n):
     return model
 
 
-def run_fit(M, M_err, model, sys_frac=0.01, t_min_us=0.0):
+def run_fit(M, M_err, model, sys_frac=0.01, t_min_us=0.0, tau_slow_start_ns=1500):
     n = len(M)
     samples = np.arange(n)
     t_us = samples * SAMPLE_NS / 1000
@@ -170,7 +170,7 @@ def run_fit(M, M_err, model, sys_frac=0.01, t_min_us=0.0):
     use = t_us >= t_min_us
 
     total = M.sum()
-    p0    = [0,   0.2 * total, 0.2 * total, 50,  0.6 * total, 750,  0]
+    p0    = [0,   0.2 * total, 0.2 * total, 50,  0.6 * total, tau_slow_start_ns / SAMPLE_NS, 0]
     lower = [-30, 0,           0,           5,   0,           300,  -np.inf]
     upper = [30,  np.inf,      np.inf,      300, np.inf,      5000, np.inf]
 
