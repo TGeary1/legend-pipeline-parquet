@@ -128,7 +128,7 @@ if __name__ == "__main__":
     ap.add_argument("--window", action="append", help="LABEL:RUN:FIRST-LAST; repeatable (default: one per phase)")
     ap.add_argument("--max-jump", type=float, default=8.0, help="Pileup cut, PE")
     ap.add_argument("--sat-floor", type=float, default=7067)
-    ap.add_argument("--sat-margin", type=float, default=50)
+    ap.add_argument("--sat-margin", type=float, default=180)
     ap.add_argument("--alpha-min", type=float, default=20, help="Alpha energy range for the PSD panel, PE")
     ap.add_argument("--alpha-max", type=float, default=150)
     main(ap.parse_args())

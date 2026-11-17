@@ -11,6 +11,8 @@ Cuts:
     Clipped pulses lose prompt charge, which biases both PSD and n_pe.
     The floor (~7,067 raw ADC) was measured on liquid; the script prints
     each run's lowest value so you can confirm all runs share it.
+  - The threshold is 8 PE: at 3-5 PE, coincident photons of the argon's own
+    slow light (gas, solid) trip the tag and remove the brightest alphas.
   - pileup: max_jump_pe (largest 20 ns rise after the main pulse, in units
     of one photon's pulse height) must be below --max-jump. Late argon
     light arrives one photon at a time, so a multi-PE jump is a second
@@ -83,10 +85,14 @@ def style(ax):
 # Filling histograms
 # ---------------------------------------------------------------------------
 
-def fill_run(run_dir, sat_floor, sat_margin, max_jump):
+def fill_run(run_dir, sat_floor, sat_margin, max_jump, seq_range=None):
     """One pass over a run's hit files. Returns two 2D histograms of the
-    events passing both cuts, plus cut bookkeeping."""
+    events passing both cuts, plus cut bookkeeping. seq_range=(first, last)
+    keeps only files with those sequence numbers (inclusive)."""
     files = sorted((Path(run_dir) / "hit").glob("*.parquet"))
+    if seq_range is not None:
+        first, last = seq_range
+        files = [f for f in files if first <= parse_run_info(f.stem)[1] <= last]
     if not files:
         raise FileNotFoundError(f"no hit files in {run_dir}/hit")
     cols = ["n_pe", "psd_param", "lowest_adc", "max_jump_pe"]
@@ -184,7 +190,7 @@ def plot_2d(data, bands, path):
         ax.set_xscale("log")
         lo, hi = bands[phase]
         for y in (lo, hi):
-            ax.hlines(y, 20, 150, colors="white", linestyles="--", linewidth=1.2)
+            ax.hlines(y, 20, 150, colors="red", linestyles="--", linewidth=1.2)
         ax.set_title(f"{phase} ({d['n_kept']:,} events after cuts)")
         ax.set_xlabel("n_pe (photoelectrons)")
         fig.colorbar(m, ax=ax, label="events")
@@ -305,7 +311,7 @@ def main(args):
             continue
         log.info(f"filling {rd.name} ({phase})")
         r = fill_run(rd, args.sat_floor, args.sat_margin, args.max_jump)
-        r.update(run_base=run_base, phase=phase)
+        r.update(run_base=run_base, phase=phase, run_dir=str(rd))
         per_run[run_base] = r
 
     # combine runs into phases
@@ -358,10 +364,34 @@ def main(args):
                lambda n: COLORS[run_names.index(n) % len(COLORS)] if run_names.index(n) < len(COLORS)
                else ["#e87ba4", "#008300"][run_names.index(n) - len(COLORS)])
 
+    # stable time windows: --window LABEL:RUN:FIRST-LAST (file numbers, inclusive)
+    window_bands, window_spectra, window_fits = {}, {}, {}
+    for w in args.window or []:
+        label, run_base, file_range = w.split(":")
+        first, last = (int(x) for x in file_range.split("-"))
+        if run_base not in per_run:
+            log.warning(f"window {label}: run {run_base} was not read; skipped")
+            continue
+        wr = fill_run(per_run[run_base]["run_dir"], args.sat_floor, args.sat_margin,
+                      args.max_jump, seq_range=(first, last))
+        log.info(f"window {label}: {run_base} files {first}-{last} "
+                 f"({wr['n_files']} files, {wr['n_kept']:,} events after cuts)")
+        window_bands[label] = overrides.get(label) or find_band(wr["h_lin"], args.band_half_width)
+        window_spectra[label] = band_spectrum(wr["h_lin"], window_bands[label])
+        window_fits[label] = fit_peak(window_spectra[label], args.fit_min)
+    if window_spectra:
+        names = list(window_spectra)
+        palette = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4",
+                   "#008300", "#7a5195", "#5b5b5b", "#00a3c4", "#a0522d"]
+        plot_alpha(window_spectra, {k: v for k, v in window_fits.items() if v},
+                   out / "alpha_peak_by_window.png",
+                   "Stable time windows: n_pe spectrum of each window's alpha band",
+                   lambda n: palette[names.index(n) % len(palette)])
+
     print("\nAlpha band and light yield (detected PE per MeV of alpha energy, statistical errors only)")
     print(f"{'':<14}{'PSD band':>16}{'peak n_pe':>16}{'width σ':>10}{'√peak':>8}{'LY (PE/MeV)':>16}")
-    for name, f in list(phase_fits.items()) + list(run_fits.items()):
-        band = run_bands[name] if name in run_fits else bands[name]
+    for name, f in list(phase_fits.items()) + list(run_fits.items()) + list(window_fits.items()):
+        band = window_bands.get(name) or run_bands.get(name) or bands[name]
         if f is None:
             print(f"{name:<14}{band[0]:>7.3f}-{band[1]:<8.3f}   fit failed")
             continue
@@ -377,6 +407,8 @@ def main(args):
         "alpha_fit_by_phase": phase_fits,
         "alpha_band_by_run": {rb: list(b) for rb, b in run_bands.items()},
         "alpha_fit_by_run": run_fits,
+        "alpha_band_by_window": {w: list(b) for w, b in window_bands.items()},
+        "alpha_fit_by_window": window_fits,
     }
     with open(out / "phase_comparison_summary.json", "w") as f:
         json.dump(summary, f, indent=2, default=float)
@@ -394,8 +426,11 @@ if __name__ == "__main__":
     ap.add_argument("--output-dir", default="results/phase_comparison")
     ap.add_argument("--sat-floor", type=float, default=7067, help="Raw ADC value where pulses clip")
     ap.add_argument("--sat-margin", type=float, default=50, help="Flag pulses within this many ADC of the floor")
-    ap.add_argument("--max-jump", type=float, default=3.0,
+    ap.add_argument("--max-jump", type=float, default=8.0,
                     help="Pileup cut: keep events whose largest late 20 ns rise is below this many PE")
+    ap.add_argument("--window", action="append",
+                    help="Stable time window LABEL:RUN:FIRST-LAST (file numbers within the run, "
+                         "inclusive), e.g. liquid_early:260520_1340:0-8. Repeatable.")
     ap.add_argument("--band-half-width", type=float, default=0.08,
                     help="Half-width in PSD of the automatically found alpha band")
     ap.add_argument("--band", action="append",

@@ -477,7 +477,7 @@ if __name__ == "__main__":
     ap.add_argument("--n-pe-min", type=float, default=30, help="Bright threshold; keep equal across compared groups")
     ap.add_argument("--psd-half-width", type=float, default=0.15, help="Alpha band half-width in PSD; 0 disables")
     ap.add_argument("--sat-floor", type=float, default=7067)
-    ap.add_argument("--sat-margin", type=float, default=50)
+    ap.add_argument("--sat-margin", type=float, default=180)
     ap.add_argument("--max-jump", type=float, default=8.0, help="Pileup cut for the baseline fit, in PE")
     ap.add_argument("--check-jumps", type=float, nargs="*", default=[5.0, 12.0],
                     help="Extra pileup thresholds; their spread is a systematic")
